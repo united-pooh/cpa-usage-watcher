@@ -1,0 +1,44 @@
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.hmap
+
+# User-specific Xcode data
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# CocoaPods / Carthage
+Pods/
+Carthage/Build/
+
+# App artifacts
+*.app
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs and local tooling
+*.log
+.pipeline-last-run-summary.json
+.pipeline-workspace/
+.playwright-mcp/
+.claude/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
