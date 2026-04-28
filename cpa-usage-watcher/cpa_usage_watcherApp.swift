@@ -1,17 +1,13 @@
-//
-//  cpa_usage_watcherApp.swift
-//  cpa-usage-watcher
-//
-//  Created by 小咸 on 2026/4/27.
-//
-
 import SwiftUI
 
 @main
 struct cpa_usage_watcherApp: App {
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("CPA Usage Watcher · 使用統計") {
             ContentView()
+                .preferredColorScheme(.light)
         }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1440, height: 1100)
     }
 }
