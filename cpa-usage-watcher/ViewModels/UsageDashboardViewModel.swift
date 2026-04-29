@@ -11,6 +11,22 @@ final class UsageDashboardViewModel: ObservableObject {
     @Published private(set) var lastUpdatedAt: Date?
     @Published var errorMessage: String?
     @Published var successMessage: String?
+    @Published var refreshSettings: UsageRefreshSettings {
+        didSet {
+            guard oldValue != refreshSettings else {
+                return
+            }
+            let sanitized = UsageRefreshSettings(
+                isAutoRefreshEnabled: refreshSettings.isAutoRefreshEnabled,
+                intervalSeconds: UsageRefreshSettings.sanitizedInterval(refreshSettings.intervalSeconds)
+            )
+            if sanitized != refreshSettings {
+                refreshSettings = sanitized
+                return
+            }
+            preferencesStore.saveRefreshSettings(refreshSettings)
+        }
+    }
     @Published var masksSensitiveValues: Bool {
         didSet {
             guard oldValue != masksSensitiveValues else {
@@ -167,6 +183,7 @@ final class UsageDashboardViewModel: ObservableObject {
     private let apiClient: UsageAPIClient
     private let connectionSettingsStore: ConnectionSettingsStore
     private let preferencesStore: UsagePreferencesStore
+    private let sqliteStore: UsageSQLiteStore?
     private let calendar: Calendar
     private let now: () -> Date
     private var isSanitizingExchangeRate = false
@@ -176,15 +193,18 @@ final class UsageDashboardViewModel: ObservableObject {
         apiClient: UsageAPIClient? = nil,
         connectionSettingsStore: ConnectionSettingsStore? = nil,
         preferencesStore: UsagePreferencesStore? = nil,
+        sqliteStore: UsageSQLiteStore? = nil,
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init
     ) {
         let connectionSettingsStore = connectionSettingsStore ?? ConnectionSettingsStore()
         let preferencesStore = preferencesStore ?? UsagePreferencesStore()
+        let resolvedSQLiteStore: UsageSQLiteStore? = sqliteStore ?? (try? UsageSQLiteStore())
 
         self.apiClient = apiClient ?? UsageAPIClient()
         self.connectionSettingsStore = connectionSettingsStore
         self.preferencesStore = preferencesStore
+        self.sqliteStore = resolvedSQLiteStore
         self.calendar = calendar
         self.now = now
 
@@ -210,6 +230,15 @@ final class UsageDashboardViewModel: ObservableObject {
         self.displayCurrency = costDisplaySettings.displayCurrency
         self.usdToCNYExchangeRate = costDisplaySettings.usdToCNYExchangeRate
         self.costCalculationBasis = costDisplaySettings.calculationBasis
+        self.refreshSettings = preferencesStore.loadRefreshSettings()
+
+        if let store = resolvedSQLiteStore {
+            do {
+                self.snapshot = try persistedSnapshot(from: store)
+            } catch {
+                self.errorMessage = Self.message(for: error)
+            }
+        }
 
         updateDisplaySnapshot()
     }
@@ -219,7 +248,7 @@ final class UsageDashboardViewModel: ObservableObject {
     }
 
     var hasLoadedData: Bool {
-        rawPayload != nil
+        rawPayload != nil || !snapshot.events.isEmpty || snapshot.summary.totalRequests > 0
     }
 
     var hasActiveEventFilters: Bool {
@@ -318,6 +347,34 @@ final class UsageDashboardViewModel: ObservableObject {
         masksSensitiveValues ? "eye" : "eye.slash"
     }
 
+    var refreshIntervalTitle: String {
+        guard refreshSettings.isAutoRefreshEnabled else {
+            return "自動刷新 · 關閉"
+        }
+        let seconds = refreshSettings.intervalSeconds
+        if seconds < 60 {
+            return "自動刷新 · \(seconds)s"
+        } else if seconds % 60 == 0 {
+            return "自動刷新 · \(seconds / 60)m"
+        } else {
+            return "自動刷新 · \(seconds)s"
+        }
+    }
+
+    func setRefreshIntervalSeconds(_ seconds: Int) {
+        refreshSettings = UsageRefreshSettings(
+            isAutoRefreshEnabled: refreshSettings.isAutoRefreshEnabled,
+            intervalSeconds: UsageRefreshSettings.sanitizedInterval(seconds)
+        )
+    }
+
+    func setAutoRefreshEnabled(_ enabled: Bool) {
+        refreshSettings = UsageRefreshSettings(
+            isAutoRefreshEnabled: enabled,
+            intervalSeconds: refreshSettings.intervalSeconds
+        )
+    }
+
     func loadStoredConnectionSettingsIfNeeded() async {
         guard !didStartStoredConnectionSettingsLoad else {
             return
@@ -353,7 +410,40 @@ final class UsageDashboardViewModel: ObservableObject {
                 timeRange: selectedTimeRange
             )
             rawPayload = payload
-            rebuildSnapshot()
+
+            if let store = sqliteStore {
+                let payloadToPersist = payload
+                let timeRange = selectedTimeRange
+                let capturedNow = now()
+                let calendar = calendar
+                let modelPrices = modelPrices
+                let trendGranularity = trendGranularity
+                let costCalculationBasis = costCalculationBasis
+                snapshot = try await Task.detached(priority: .utility) {
+                    let fetchedEvents = UsageAggregator.events(
+                        from: payloadToPersist,
+                        timeRange: timeRange,
+                        now: capturedNow,
+                        calendar: calendar
+                    )
+                    try store.upsert(events: fetchedEvents)
+                    try store.saveRawFetch(payload: payloadToPersist, timeRange: timeRange, fetchedAt: capturedNow)
+                    let quotaSnapshots = UsageAggregator.credentialQuotaSnapshots(from: fetchedEvents, capturedAt: capturedNow)
+                    try store.upsert(quotaSnapshots: quotaSnapshots)
+                    return try store.dashboardSnapshot(
+                        in: timeRange,
+                        prices: modelPrices,
+                        basis: costCalculationBasis,
+                        now: capturedNow,
+                        calendar: calendar,
+                        trendGranularity: trendGranularity
+                    )
+                }.value
+                updateDisplaySnapshot()
+                writeWidgetData()
+            } else {
+                rebuildSnapshot()
+            }
             lastUpdatedAt = now()
             loadState = .loaded
             successMessage = "用量数据已更新。"
@@ -390,6 +480,41 @@ final class UsageDashboardViewModel: ObservableObject {
                 settings: connectionSettings,
                 contentType: contentType
             )
+            if let payload = importPayload(from: result, data: data, contentType: contentType) {
+                rawPayload = payload
+                if let store = sqliteStore {
+                    let payloadToPersist = payload
+                    let capturedNow = now()
+                    let calendar = calendar
+                    let modelPrices = modelPrices
+                    let trendGranularity = trendGranularity
+                    let costCalculationBasis = costCalculationBasis
+                    snapshot = try await Task.detached(priority: .utility) {
+                        let importedEvents = UsageAggregator.events(
+                            from: payloadToPersist,
+                            timeRange: .all,
+                            now: capturedNow,
+                            calendar: calendar
+                        )
+                        try store.upsert(events: importedEvents)
+                        try store.saveRawFetch(payload: payloadToPersist, timeRange: .all, fetchedAt: capturedNow)
+                        try store.upsert(quotaSnapshots: UsageAggregator.credentialQuotaSnapshots(from: importedEvents, capturedAt: capturedNow))
+                        return try store.dashboardSnapshot(
+                            in: .all,
+                            prices: modelPrices,
+                            basis: costCalculationBasis,
+                            now: capturedNow,
+                            calendar: calendar,
+                            trendGranularity: trendGranularity
+                        )
+                    }.value
+                    updateDisplaySnapshot()
+                    writeWidgetData()
+                }
+            }
+            if sqliteStore == nil {
+                rebuildSnapshot()
+            }
             successMessage = result.message.isEmpty ? "用量数据已导入。" : result.message
             errorMessage = nil
             return result
@@ -744,23 +869,83 @@ final class UsageDashboardViewModel: ObservableObject {
     }
 
     private func rebuildSnapshot() {
-        guard let rawPayload else {
-            snapshot = UsageSnapshot(timeRange: selectedTimeRange)
+        if let store = sqliteStore {
+            do {
+                snapshot = try persistedSnapshot(from: store)
+                errorMessage = nil
+            } catch {
+                errorMessage = Self.message(for: error)
+                if rawPayload == nil {
+                    snapshot = UsageSnapshot(timeRange: selectedTimeRange)
+                }
+            }
+            if rawPayload == nil || errorMessage == nil {
+                updateDisplaySnapshot()
+                writeWidgetData()
+                return
+            }
+        }
+
+        if let rawPayload {
+            snapshot = UsageAggregator.aggregate(
+                rawPayload,
+                timeRange: selectedTimeRange,
+                modelPrices: modelPrices,
+                now: now(),
+                calendar: calendar,
+                trendGranularity: trendGranularity,
+                costCalculationBasis: costCalculationBasis
+            )
             updateDisplaySnapshot()
+            writeWidgetData()
             return
         }
 
-        snapshot = UsageAggregator.aggregate(
-            rawPayload,
-            timeRange: selectedTimeRange,
-            modelPrices: modelPrices,
+        snapshot = UsageSnapshot(timeRange: selectedTimeRange)
+        updateDisplaySnapshot()
+    }
+
+    private func persistedSnapshot(from store: UsageSQLiteStore) throws -> UsageSnapshot {
+        try store.dashboardSnapshot(
+            in: selectedTimeRange,
+            prices: modelPrices,
+            basis: costCalculationBasis,
             now: now(),
             calendar: calendar,
-            trendGranularity: trendGranularity,
-            costCalculationBasis: costCalculationBasis
+            trendGranularity: trendGranularity
         )
-        updateDisplaySnapshot()
-        writeWidgetData()
+    }
+
+    private func persist(payload: UsageRawPayload, to store: UsageSQLiteStore, timeRange: UsageTimeRange) throws {
+        let importedEvents = UsageAggregator.events(
+            from: payload,
+            timeRange: timeRange,
+            now: now(),
+            calendar: calendar
+        )
+        try store.upsert(events: importedEvents)
+        try store.saveRawFetch(payload: payload, timeRange: timeRange, fetchedAt: now())
+        try store.upsert(quotaSnapshots: UsageAggregator.credentialQuotaSnapshots(from: importedEvents, capturedAt: now()))
+    }
+
+    private func importPayload(from result: UsageImportResult, data: Data, contentType: String) -> UsageRawPayload? {
+        let localPayload = localImportPayload(from: data, contentType: contentType)
+        guard let responsePayload = result.rawPayload else {
+            return localPayload
+        }
+        if UsageAggregator.events(from: responsePayload, timeRange: .all, now: now(), calendar: calendar).isEmpty,
+           let localPayload,
+           !UsageAggregator.events(from: localPayload, timeRange: .all, now: now(), calendar: calendar).isEmpty {
+            return localPayload
+        }
+        return responsePayload
+    }
+
+    private func localImportPayload(from data: Data, contentType: String) -> UsageRawPayload? {
+        guard contentType.localizedCaseInsensitiveContains("json") || contentType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return try? JSONDecoder().decode(UsageRawPayload.self, from: data)
     }
 
     private func writeWidgetData() {

@@ -10,6 +10,7 @@ final class UsagePreferencesStore {
     private let modelPricesKey: String
     private let maskSensitiveValuesKey: String
     private let costDisplaySettingsKey: String
+    private let refreshSettingsKey: String
 
     init(
         defaults: UserDefaults = .standard,
@@ -20,7 +21,8 @@ final class UsagePreferencesStore {
         trendGranularityKey: String = "usage.dashboard.trendGranularity",
         modelPricesKey: String = "usage.dashboard.modelPrices",
         maskSensitiveValuesKey: String = "usage.dashboard.maskSensitiveValues",
-        costDisplaySettingsKey: String = "usage.dashboard.costDisplaySettings"
+        costDisplaySettingsKey: String = "usage.dashboard.costDisplaySettings",
+        refreshSettingsKey: String = "usage.dashboard.refreshSettings"
     ) {
         self.defaults = defaults
         self.encoder = encoder
@@ -31,6 +33,7 @@ final class UsagePreferencesStore {
         self.modelPricesKey = modelPricesKey
         self.maskSensitiveValuesKey = maskSensitiveValuesKey
         self.costDisplaySettingsKey = costDisplaySettingsKey
+        self.refreshSettingsKey = refreshSettingsKey
     }
 
     func loadSelectedTimeRange() -> UsageTimeRange {
@@ -116,6 +119,16 @@ final class UsagePreferencesStore {
         defaults.set(masksSensitiveValues, forKey: maskSensitiveValuesKey)
     }
 
+    func loadRefreshSettings() -> UsageRefreshSettings {
+        sanitizeRefreshSettings(
+            load(UsageRefreshSettings.self, forKey: refreshSettingsKey, default: .defaultValue)
+        )
+    }
+
+    func saveRefreshSettings(_ settings: UsageRefreshSettings) {
+        save(sanitizeRefreshSettings(settings), forKey: refreshSettingsKey)
+    }
+
     func reset() {
         defaults.removeObject(forKey: timeRangeKey)
         defaults.removeObject(forKey: chartSeriesKey)
@@ -123,6 +136,7 @@ final class UsagePreferencesStore {
         defaults.removeObject(forKey: modelPricesKey)
         defaults.removeObject(forKey: maskSensitiveValuesKey)
         defaults.removeObject(forKey: costDisplaySettingsKey)
+        defaults.removeObject(forKey: refreshSettingsKey)
     }
 
     private func load<T: Decodable>(_ type: T.Type, forKey key: String, default defaultValue: T) -> T {
@@ -167,6 +181,13 @@ final class UsagePreferencesStore {
             displayCurrency: settings.displayCurrency,
             usdToCNYExchangeRate: settings.usdToCNYExchangeRate,
             calculationBasis: settings.calculationBasis
+        )
+    }
+
+    private func sanitizeRefreshSettings(_ settings: UsageRefreshSettings) -> UsageRefreshSettings {
+        UsageRefreshSettings(
+            isAutoRefreshEnabled: settings.isAutoRefreshEnabled,
+            intervalSeconds: UsageRefreshSettings.sanitizedInterval(settings.intervalSeconds)
         )
     }
 

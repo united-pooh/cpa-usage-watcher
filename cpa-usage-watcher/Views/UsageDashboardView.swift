@@ -147,11 +147,29 @@ struct UsageDashboardView: View {
             }
         }
         .task {
+            await viewModel.loadStoredConnectionSettingsIfNeeded()
             guard !viewModel.hasLoadedData else {
                 return
             }
-            await viewModel.loadStoredConnectionSettingsIfNeeded()
             await viewModel.refresh()
+        }
+        .task(id: viewModel.refreshSettings) {
+            guard viewModel.refreshSettings.isAutoRefreshEnabled else {
+                return
+            }
+            let intervalNanoseconds = UInt64(viewModel.refreshSettings.intervalSeconds) * 1_000_000_000
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: intervalNanoseconds)
+                } catch {
+                    // Cancelled — stop looping
+                    return
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                await viewModel.refresh()
+            }
         }
     }
 
@@ -799,7 +817,6 @@ struct UsageDashboardView: View {
             }.value
             let contentType = importContentType(for: url)
             _ = try await viewModel.importUsage(data, contentType: contentType)
-            await viewModel.refresh()
         } catch {
             viewModel.errorMessage = error.localizedDescription
         }

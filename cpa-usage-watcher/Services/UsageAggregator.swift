@@ -1,6 +1,6 @@
 import Foundation
 
-enum UsageAggregator {
+nonisolated enum UsageAggregator {
     static func snapshot(
         from payload: UsageRawPayload,
         timeRange: UsageTimeRange = .defaultSelection,
@@ -28,6 +28,7 @@ enum UsageAggregator {
             models: modelStats(from: pricedRecords),
             events: eventRows(from: records),
             credentials: credentialStats(from: pricedRecords),
+            credentialQuotas: events(from: payload, timeRange: timeRange, now: now, calendar: calendar).compactMap { quotaSnapshot(from: $0, capturedAt: now) },
             trends: trends(from: pricedRecords, granularity: granularity, calendar: calendar),
             timeRange: timeRange,
             generatedAt: generatedAt(from: payload.root) ?? now,
@@ -96,6 +97,77 @@ enum UsageAggregator {
         )
     }
 
+
+
+    static func snapshot(
+        from events: [RequestEvent],
+        timeRange: UsageTimeRange = .defaultSelection,
+        prices: [ModelPriceSetting] = [],
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        trendGranularity: TrendGranularity? = nil,
+        costCalculationBasis: CostCalculationBasis = .defaultSelection,
+        credentialQuotas: [CredentialQuotaSnapshot]? = nil
+    ) -> UsageSnapshot {
+        let filtered = events.filter { timeRange.contains($0.timestamp, now: now, calendar: calendar) }
+        let records = filtered.map { record(from: $0) }
+        let pricedRecords = price(records, with: prices, basis: costCalculationBasis)
+        let granularity = trendGranularity ?? inferredGranularity(for: timeRange, records: records)
+        return UsageSnapshot(
+            summary: summary(from: pricedRecords, timeRange: timeRange, now: now, calendar: calendar),
+            endpoints: endpointStats(from: pricedRecords),
+            models: modelStats(from: pricedRecords),
+            events: filtered.sorted { $0.timestamp > $1.timestamp },
+            credentials: credentialStats(from: pricedRecords),
+            credentialQuotas: credentialQuotas ?? filtered.compactMap { quotaSnapshot(from: $0, capturedAt: now) },
+            trends: trends(from: pricedRecords, granularity: granularity, calendar: calendar),
+            timeRange: timeRange,
+            generatedAt: now,
+            sourceDescription: "本地历史记录",
+            rawPayload: nil
+        )
+    }
+
+    static func healthBuckets(from events: [RequestEvent], now: Date = Date(), calendar: Calendar = .current) -> [HealthBucket] {
+        let bucketSeconds: TimeInterval = 10 * 60
+        let totalBuckets = 7 * 24 * 6
+        let alignedNow = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 / bucketSeconds) * bucketSeconds)
+        let firstStart = alignedNow.addingTimeInterval(-bucketSeconds * TimeInterval(totalBuckets - 1))
+        let grouped = Dictionary(grouping: events) { event -> Int in
+            Int(floor(event.timestamp.timeIntervalSince(firstStart) / bucketSeconds))
+        }
+        return (0..<totalBuckets).map { index in
+            let start = firstStart.addingTimeInterval(TimeInterval(index) * bucketSeconds)
+            let bucketEvents = grouped[index, default: []].filter { $0.timestamp >= start && $0.timestamp < start.addingTimeInterval(bucketSeconds) }
+            guard !bucketEvents.isEmpty else {
+                return HealthBucket(start: start, end: start.addingTimeInterval(bucketSeconds))
+            }
+            let failed = bucketEvents.filter { !$0.isSuccess }.count
+            let avgLatency = bucketEvents.map(\.latencyMs).reduce(0, +) / Double(bucketEvents.count)
+            let successRate = Double(bucketEvents.count - failed) / Double(bucketEvents.count)
+            let status: HealthBucketStatus
+            if successRate < 0.75 || failed >= 3 {
+                status = .failed
+            } else if successRate < 0.95 || avgLatency >= 10_000 {
+                status = .degraded
+            } else if failed > 0 || avgLatency >= 5_000 {
+                status = .warning
+            } else {
+                status = .healthy
+            }
+            return HealthBucket(start: start, end: start.addingTimeInterval(bucketSeconds), requests: bucketEvents.count, failedRequests: failed, averageLatencyMs: avgLatency, status: status)
+        }
+    }
+
+    static func credentialQuotaSnapshots(from payload: UsageRawPayload, capturedAt: Date = Date()) -> [CredentialQuotaSnapshot] {
+        credentialQuotaSnapshots(from: events(from: payload, timeRange: .all, now: capturedAt), capturedAt: capturedAt)
+    }
+
+    static func credentialQuotaSnapshots(from events: [RequestEvent], capturedAt: Date = Date()) -> [CredentialQuotaSnapshot] {
+        events.compactMap { quotaSnapshot(from: $0, capturedAt: capturedAt) }
+    }
+
+
     static func events(
         from payload: UsageRawPayload,
         timeRange: UsageTimeRange = .defaultSelection,
@@ -127,7 +199,7 @@ enum UsageAggregator {
     }
 }
 
-private extension UsageAggregator {
+private nonisolated extension UsageAggregator {
     struct NormalizedRecord: Hashable {
         var event: RequestEvent
         var credential: String
@@ -147,6 +219,57 @@ private extension UsageAggregator {
         var record: NormalizedRecord
         var cost: Double?
     }
+
+
+
+    static func record(from event: RequestEvent) -> NormalizedRecord {
+        NormalizedRecord(
+            event: event,
+            credential: event.authIndex.isEmpty ? event.source : event.authIndex,
+            requestCount: 1,
+            successfulRequests: event.isSuccess ? 1 : 0,
+            failedRequests: event.isSuccess ? 0 : 1,
+            totalLatencyMs: event.latencyMs,
+            inputTokens: event.inputTokens,
+            outputTokens: event.outputTokens,
+            cachedTokens: event.cachedTokens,
+            reasoningTokens: event.reasoningTokens,
+            totalTokens: event.totalTokens,
+            estimatedCost: event.estimatedCost ?? event.metadata.value(anyOf: ["estimated_cost", "cost", "price"])?.double
+        )
+    }
+
+    static func quotaSnapshot(from event: RequestEvent, capturedAt: Date) -> CredentialQuotaSnapshot? {
+        let metadata = event.metadata
+        let identity = [event.source, event.provider, event.authIndex].joined(separator: " ").lowercased()
+        if identity.contains("api key") || identity.contains("apikey") || identity.contains("api_key") || identity.contains("endpoint") || event.authIndex.lowercased().hasPrefix("sk-") {
+            return nil
+        }
+        let quotaObject = metadata.value(anyOf: ["quota", "limit", "usage", "subscription", "plan", "window", "period"])?.object ?? metadata
+        let limit = quotaObject.value(anyOf: ["limit", "total", "quota", "max"])?.double
+        let used = quotaObject.value(anyOf: ["used", "usage", "consumed", "current"])?.double
+        let remaining = quotaObject.value(anyOf: ["remaining", "left", "available"])?.double
+        let percent = quotaObject.value(anyOf: ["percent", "percentage", "usage_percent", "usagePercent"])?.double.map { $0 > 1 ? $0 / 100 : $0 }
+        guard limit != nil || used != nil || remaining != nil || percent != nil else {
+            return nil
+        }
+        let resetAt = quotaObject.value(anyOf: ["reset", "reset_at", "resetAt", "resets_at", "expires_at"])?.string.flatMap(UsageDateParser.parse)
+        let windowTitle = quotaObject.value(anyOf: ["window", "period", "interval", "title"])?.string ?? "额度窗口"
+        let usage = CredentialQuotaUsage(title: windowTitle, used: used, limit: limit, remaining: remaining, usagePercent: percent, resetAt: resetAt)
+        let planTitle = metadata.value(anyOf: ["plan", "planTitle", "subscription", "tier"])?.string ?? ""
+        return CredentialQuotaSnapshot(
+            id: [event.provider, event.source, event.authIndex, windowTitle].joined(separator: ":"),
+            credential: event.authIndex.isEmpty ? event.source : event.authIndex,
+            source: event.source,
+            provider: event.provider,
+            providerTitle: event.provider.isEmpty ? event.source : event.provider,
+            planTitle: planTitle,
+            shortWindow: usage,
+            capturedAt: capturedAt,
+            rawMetadata: metadata
+        )
+    }
+
 
     struct TokenMetrics {
         var input: Int = 0
@@ -882,6 +1005,7 @@ private extension UsageAggregator {
             reasoningTokens: tokens.reasoning,
             cachedTokens: tokens.cached,
             totalTokens: tokens.total,
+            estimatedCost: estimatedCost,
             metadata: object
         )
 
@@ -1407,7 +1531,7 @@ private extension UsageAggregator {
     }
 }
 
-private extension String {
+private nonisolated extension String {
     var trimmedNonEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed.lowercased() == "null" {
@@ -1417,7 +1541,7 @@ private extension String {
     }
 }
 
-private extension Int {
+private nonisolated extension Int {
     func nonZero(or fallback: Int) -> Int {
         self == 0 ? fallback : self
     }

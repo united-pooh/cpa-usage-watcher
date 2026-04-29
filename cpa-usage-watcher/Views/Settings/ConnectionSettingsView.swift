@@ -9,6 +9,8 @@ struct ConnectionSettingsView: View {
     @State private var displayCurrency: DisplayCurrency
     @State private var exchangeRateText: String
     @State private var costCalculationBasis: CostCalculationBasis
+    @State private var isAutoRefreshEnabled: Bool
+    @State private var refreshIntervalText: String
     @State private var localError: String?
     @State private var isTestingConnection = false
 
@@ -19,6 +21,8 @@ struct ConnectionSettingsView: View {
         _displayCurrency = State(initialValue: viewModel.displayCurrency)
         _exchangeRateText = State(initialValue: Self.formattedExchangeRate(viewModel.usdToCNYExchangeRate))
         _costCalculationBasis = State(initialValue: viewModel.costCalculationBasis)
+        _isAutoRefreshEnabled = State(initialValue: viewModel.refreshSettings.isAutoRefreshEnabled)
+        _refreshIntervalText = State(initialValue: "\(viewModel.refreshSettings.intervalSeconds)")
     }
 
     var body: some View {
@@ -30,6 +34,7 @@ struct ConnectionSettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     billingSection
+                    refreshSection
                     serviceSection
 
                     if let localError {
@@ -50,7 +55,7 @@ struct ConnectionSettingsView: View {
 
             actions
         }
-        .frame(width: 560, height: 620)
+        .frame(width: 560, height: 720)
         .background(DashboardTheme.panel)
         .onAppear(perform: syncDrafts)
     }
@@ -129,6 +134,66 @@ struct ConnectionSettingsView: View {
         }
     }
 
+    private var refreshSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("自動刷新 / 持久化")
+
+            HStack(spacing: 10) {
+                Text("自動刷新")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(DashboardTheme.softInk)
+
+                Spacer(minLength: 12)
+
+                Toggle("", isOn: $isAutoRefreshEnabled)
+                    .labelsHidden()
+                    .tint(DashboardTheme.orange)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(DashboardTheme.panelRaised.opacity(0.86))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(DashboardTheme.hairline, lineWidth: 1)
+            )
+
+            HStack(spacing: 10) {
+                Text("刷新間隔（秒）")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(DashboardTheme.softInk)
+
+                Spacer(minLength: 12)
+
+                TextField("", text: $refreshIntervalText)
+                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DashboardTheme.ink)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+                    .frame(width: 80)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(DashboardTheme.panelRaised.opacity(0.86))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(DashboardTheme.hairline, lineWidth: 1)
+            )
+            .disabled(!isAutoRefreshEnabled)
+            .opacity(isAutoRefreshEnabled ? 1 : 0.44)
+
+            Text("范围 10–3600 秒。数据同步后会自动写入本地 SQLite 数据库，时间范围切换将直接从本地记录重建快照。")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(DashboardTheme.softInk)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var serviceSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("本地服務")
@@ -196,6 +261,15 @@ struct ConnectionSettingsView: View {
         return Double(normalized) ?? UsageCostDisplaySettings.defaultUSDToCNYExchangeRate
     }
 
+    private var parsedRefreshInterval: Int {
+        let raw = Int(refreshIntervalText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? UsageRefreshSettings.defaultValue.intervalSeconds
+        return UsageRefreshSettings.sanitizedInterval(raw)
+    }
+
+    private var draftRefreshSettings: UsageRefreshSettings {
+        UsageRefreshSettings(isAutoRefreshEnabled: isAutoRefreshEnabled, intervalSeconds: parsedRefreshInterval)
+    }
+
     private func sectionTitle(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 13, weight: .black, design: .rounded))
@@ -213,6 +287,7 @@ struct ConnectionSettingsView: View {
         do {
             try viewModel.saveConnectionSettings(draftSettings)
             applyCostSettings()
+            applyRefreshSettings()
             localError = nil
             dismiss()
         } catch {
@@ -227,6 +302,7 @@ struct ConnectionSettingsView: View {
         do {
             try viewModel.saveConnectionSettings(draftSettings)
             applyCostSettings()
+            applyRefreshSettings()
             localError = nil
             await viewModel.refresh()
         } catch {
@@ -250,12 +326,20 @@ struct ConnectionSettingsView: View {
         exchangeRateText = Self.formattedExchangeRate(settings.usdToCNYExchangeRate)
     }
 
+    private func applyRefreshSettings() {
+        let settings = draftRefreshSettings
+        viewModel.refreshSettings = settings
+        refreshIntervalText = "\(settings.intervalSeconds)"
+    }
+
     private func syncDrafts() {
         baseURL = viewModel.connectionSettings.baseURL
         managementKey = viewModel.connectionSettings.managementKey
         displayCurrency = viewModel.displayCurrency
         exchangeRateText = Self.formattedExchangeRate(viewModel.usdToCNYExchangeRate)
         costCalculationBasis = viewModel.costCalculationBasis
+        isAutoRefreshEnabled = viewModel.refreshSettings.isAutoRefreshEnabled
+        refreshIntervalText = "\(viewModel.refreshSettings.intervalSeconds)"
     }
 
     private static func formattedExchangeRate(_ exchangeRate: Double) -> String {

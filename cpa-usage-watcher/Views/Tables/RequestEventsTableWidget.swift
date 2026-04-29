@@ -2,6 +2,27 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Column width constants (shared/stable)
+private enum EventColumn {
+    static let rowMark: CGFloat = 24
+    static let time: CGFloat = 100
+    static let model: CGFloat = 160
+    static let source: CGFloat = 130
+    static let authIndex: CGFloat = 90
+    static let status: CGFloat = 58
+    static let latency: CGFloat = 68
+    static let inputTok: CGFloat = 60
+    static let outputTok: CGFloat = 60
+    static let reasoningTok: CGFloat = 60
+    static let cacheTok: CGFloat = 60
+    static let totalTok: CGFloat = 72
+
+    static var totalWidth: CGFloat {
+        rowMark + time + model + source + authIndex + status + latency
+            + inputTok + outputTok + reasoningTok + cacheTok + totalTok
+    }
+}
+
 struct RequestEventsTableWidget: View {
     @ObservedObject var viewModel: UsageDashboardViewModel
 
@@ -13,22 +34,25 @@ struct RequestEventsTableWidget: View {
             if viewModel.sortedEvents.isEmpty {
                 RequestEventsEmptyState(hasFilters: viewModel.hasActiveEventFilters)
             } else {
-                VStack(spacing: 0) {
-                    RequestEventsColumnHeader(viewModel: viewModel)
-                    ForEach(Array(viewModel.sortedEvents.prefix(15).enumerated()), id: \.element.id) { index, event in
-                    RequestEventsRow(
-                        event: event,
-                        sourceTitle: viewModel.displayedSourceTitle(
-                            source: event.source,
-                            provider: event.provider
-                        ),
-                        authIndexTitle: viewModel.displayedSensitiveValue(event.authIndex),
-                        rowIndex: index,
-                        modelTint: DashboardTheme.accent(index + 1)
-                    )
+                ScrollView(.horizontal, showsIndicators: true) {
+                    VStack(spacing: 0) {
+                        RequestEventsColumnHeader(viewModel: viewModel)
+                        ForEach(Array(viewModel.sortedEvents.prefix(15).enumerated()), id: \.element.id) { index, event in
+                            RequestEventsRow(
+                                event: event,
+                                sourceTitle: viewModel.displayedSourceTitle(
+                                    source: event.source,
+                                    provider: event.provider
+                                ),
+                                authIndexTitle: viewModel.displayedSensitiveValue(event.authIndex),
+                                rowIndex: index,
+                                modelTint: DashboardTheme.accent(index + 1)
+                            )
+                        }
+                    }
+                    .frame(width: EventColumn.totalWidth + 28, alignment: .topLeading)
                 }
-                }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -41,12 +65,12 @@ struct RequestEventsTableWidget: View {
     private var header: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                    Text("請求事件明細")
-                        .font(.system(size: 15, weight: .black, design: .rounded))
-                        .foregroundStyle(DashboardTheme.ink)
-                    Text("リクエストログ")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(DashboardTheme.softInk)
+                Text("請求事件明細")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .foregroundStyle(DashboardTheme.ink)
+                Text("リクエストログ")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(DashboardTheme.softInk)
             }
 
             Spacer()
@@ -104,7 +128,7 @@ struct RequestEventsTableWidget: View {
 
             Spacer()
 
-            Text("自動刷新 · 5s")
+            Text(viewModel.refreshIntervalTitle)
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(DashboardTheme.softInk)
         }
@@ -131,6 +155,8 @@ struct RequestEventsTableWidget: View {
         }
     }
 }
+
+// MARK: - Filter Picker
 
 private struct RequestEventsFilterPicker: View {
     let title: String
@@ -165,6 +191,8 @@ private struct RequestEventsFilterPicker: View {
     }
 }
 
+// MARK: - Numeric Cell
+
 private struct RequestEventsNumericCell: View {
     let value: String
 
@@ -179,35 +207,37 @@ private struct RequestEventsNumericCell: View {
     }
 }
 
+// MARK: - Column Header
+
 private struct RequestEventsColumnHeader: View {
     @ObservedObject var viewModel: UsageDashboardViewModel
 
     var body: some View {
         HStack(spacing: 0) {
             Text("")
-                .frame(width: 24, alignment: .leading)
+                .frame(width: EventColumn.rowMark, alignment: .leading)
             sortButton(.time, title: "时间")
-                .frame(width: 84, alignment: .leading)
+                .frame(width: EventColumn.time, alignment: .leading)
             sortButton(.model, title: "模型")
-                .frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
+                .frame(width: EventColumn.model, alignment: .leading)
             sortButton(.source, title: "来源")
-                .frame(width: 100, alignment: .leading)
+                .frame(width: EventColumn.source, alignment: .leading)
             sortButton(.authIndex, title: "凭证")
-                .frame(width: 62, alignment: .leading)
+                .frame(width: EventColumn.authIndex, alignment: .leading)
             sortButton(.result, title: "结果")
-                .frame(width: 56, alignment: .leading)
+                .frame(width: EventColumn.status, alignment: .leading)
             sortButton(.latency, title: "延迟")
-                .frame(width: 60, alignment: .trailing)
+                .frame(width: EventColumn.latency, alignment: .trailing)
             Text("输入")
-                .frame(width: 52, alignment: .trailing)
+                .frame(width: EventColumn.inputTok, alignment: .trailing)
             Text("输出")
-                .frame(width: 52, alignment: .trailing)
+                .frame(width: EventColumn.outputTok, alignment: .trailing)
             Text("推理")
-                .frame(width: 52, alignment: .trailing)
+                .frame(width: EventColumn.reasoningTok, alignment: .trailing)
             Text("缓存")
-                .frame(width: 52, alignment: .trailing)
-            sortButton(.tokens, title: "總 TOKEN")
-                .frame(width: 68, alignment: .trailing)
+                .frame(width: EventColumn.cacheTok, alignment: .trailing)
+            sortButton(.tokens, title: "TOTAL")
+                .frame(width: EventColumn.totalTok, alignment: .trailing)
         }
         .font(.system(size: 11, weight: .black, design: .rounded))
         .foregroundStyle(DashboardTheme.mutedInk.opacity(0.75))
@@ -233,6 +263,8 @@ private struct RequestEventsColumnHeader: View {
     }
 }
 
+// MARK: - Row
+
 private struct RequestEventsRow: View {
     let event: RequestEvent
     let sourceTitle: String
@@ -240,97 +272,112 @@ private struct RequestEventsRow: View {
     let rowIndex: Int
     let modelTint: Color
 
+    @State private var isHovered = false
+
     var body: some View {
         HStack(spacing: 0) {
+            // Status dot
             ZStack {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(isChecked ? DashboardTheme.orange : DashboardTheme.hairline, lineWidth: 1)
-                    .background(
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(isChecked ? DashboardTheme.orange : Color.clear)
-                    )
-                if isChecked {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .black))
-                        .foregroundStyle(DashboardTheme.cream)
-                }
+                Circle()
+                    .fill(event.isSuccess ? DashboardTheme.green.opacity(0.18) : DashboardTheme.red.opacity(0.18))
+                    .frame(width: 10, height: 10)
+                Circle()
+                    .fill(event.isSuccess ? DashboardTheme.green : DashboardTheme.red)
+                    .frame(width: 5, height: 5)
             }
-            .frame(width: 12, height: 12)
-            .frame(width: 24, alignment: .leading)
+            .frame(width: EventColumn.rowMark, alignment: .leading)
 
+            // Time
             HStack(spacing: 5) {
                 Text(UsageFormatters.dateTime(event.timestamp))
                     .monospacedDigit()
                     .lineLimit(1)
             }
-            .frame(width: 84, alignment: .leading)
+            .frame(width: EventColumn.time, alignment: .leading)
 
+            // Model – middle truncate
             HStack(spacing: 5) {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(event.isSuccess ? modelTint : DashboardTheme.red)
-                    .frame(width: 7, height: 7)
+                    .frame(width: 6, height: 6)
                 Text(event.model)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            .frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
+            .frame(width: EventColumn.model, alignment: .leading)
 
+            // Source – middle truncate
             Text(sourceTitle)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(width: 100, alignment: .leading)
+                .frame(width: EventColumn.source, alignment: .leading)
 
+            // Auth index – middle truncate
             Text(authIndexTitle)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(width: 62, alignment: .leading)
+                .frame(width: EventColumn.authIndex, alignment: .leading)
 
-            Text(event.resultTitle)
-                .font(.system(size: 10, weight: .black, design: .rounded))
-                .foregroundStyle(event.isSuccess ? DashboardTheme.green : DashboardTheme.red)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill((event.isSuccess ? DashboardTheme.green : DashboardTheme.red).opacity(0.13))
-                )
-                .frame(width: 56, alignment: .leading)
+            // Status pill (fixed width capsule)
+            statusPill
+                .frame(width: EventColumn.status, alignment: .leading)
 
+            // Numeric columns – right aligned
             RequestEventsNumericCell(UsageFormatters.latencyCompact(event.latencyMs))
-                .frame(width: 60)
+                .frame(width: EventColumn.latency)
 
             RequestEventsNumericCell(UsageFormatters.tokenCount(event.inputTokens))
-                .frame(width: 52)
+                .frame(width: EventColumn.inputTok)
 
             RequestEventsNumericCell(UsageFormatters.tokenCount(event.outputTokens))
-                .frame(width: 52)
+                .frame(width: EventColumn.outputTok)
 
             RequestEventsNumericCell(UsageFormatters.tokenCount(event.reasoningTokens))
-                .frame(width: 52)
+                .frame(width: EventColumn.reasoningTok)
 
             RequestEventsNumericCell(UsageFormatters.tokenCount(event.cachedTokens))
-                .frame(width: 52)
+                .frame(width: EventColumn.cacheTok)
 
             RequestEventsNumericCell(UsageFormatters.tokenCount(event.totalTokens))
                 .font(.system(size: 12, weight: .black, design: .monospaced))
-                .frame(width: 68)
+                .frame(width: EventColumn.totalTok)
         }
         .font(.system(size: 12, weight: .medium, design: .rounded))
         .foregroundStyle(DashboardTheme.mutedInk)
         .padding(.horizontal, 14)
         .frame(height: 30)
-        .background(rowIndex.isMultiple(of: 2) ? DashboardTheme.panelRaised : DashboardTheme.panel)
+        .background(rowBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(DashboardTheme.hairline)
                 .frame(height: 0.5)
         }
+        .onHover { isHovered = $0 }
     }
 
-    private var isChecked: Bool {
-        rowIndex == 0 || rowIndex == 4
+    private var rowBackground: Color {
+        if isHovered {
+            return DashboardTheme.paper
+        }
+        return rowIndex.isMultiple(of: 2) ? DashboardTheme.panelRaised : DashboardTheme.panel
+    }
+
+    private var statusPill: some View {
+        Text(event.resultTitle)
+            .font(.system(size: 10, weight: .black, design: .rounded))
+            .foregroundStyle(event.isSuccess ? DashboardTheme.green : DashboardTheme.red)
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                Capsule(style: .continuous)
+                    .fill((event.isSuccess ? DashboardTheme.green : DashboardTheme.red).opacity(0.13))
+            )
     }
 }
+
+// MARK: - Sort Controls (retained for potential reuse)
 
 private struct RequestEventsSortControls: View {
     @ObservedObject var viewModel: UsageDashboardViewModel
@@ -371,6 +418,8 @@ private struct RequestEventsSortControls: View {
         }
     }
 }
+
+// MARK: - Empty State
 
 private struct RequestEventsEmptyState: View {
     let hasFilters: Bool
