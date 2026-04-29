@@ -930,7 +930,7 @@ nonisolated final class UsageSQLiteStore: @unchecked Sendable {
         let metadata = metadataColumn.map { decodeMetadata(columnText(statement, $0)) } ?? [:]
         let statusCode = sqlite3_column_type(statement, 8) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 8))
         let estimatedCost: Double?
-        if metadataColumn == 17, sqlite3_column_type(statement, 16) != SQLITE_NULL {
+        if sqlite3_column_type(statement, 16) != SQLITE_NULL {
             estimatedCost = sqlite3_column_double(statement, 16)
         } else {
             estimatedCost = metadata.value(anyOf: ["estimated_cost", "estimatedCost", "cost", "price"])?.double
