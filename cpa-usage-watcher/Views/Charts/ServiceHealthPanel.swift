@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 struct ServiceHealthPanel: View {
@@ -27,33 +26,7 @@ struct ServiceHealthPanel: View {
                     }
                 }
 
-                if healthBuckets.isEmpty {
-                    DashboardEmptyStateView(
-                        title: "暂无健康趋势",
-                        message: "当前时间范围没有可绘制的请求记录。",
-                        systemImage: "waveform.path.ecg"
-                    )
-                } else {
-                    Chart(healthBuckets) { bucket in
-                        BarMark(
-                            x: .value("时间", bucket.bucket),
-                            y: .value("请求", bucket.successfulRequests)
-                        )
-                        .foregroundStyle(by: .value("结果", "成功"))
-
-                        BarMark(
-                            x: .value("时间", bucket.bucket),
-                            y: .value("请求", bucket.failedRequests)
-                        )
-                        .foregroundStyle(by: .value("结果", "失败"))
-                    }
-                    .chartForegroundStyleScale([
-                        "成功": Color.green,
-                        "失败": Color.red
-                    ])
-                    .chartLegend(position: .bottom, alignment: .leading)
-                    .frame(height: 190)
-                }
+                ServiceHealthHeatmap(snapshot: snapshot)
             }
         }
     }
@@ -94,19 +67,207 @@ struct ServiceHealthPanel: View {
             )
         }
     }
+}
 
-    private var healthBuckets: [HealthBucket] {
-        let grouped = Dictionary(grouping: snapshot.trends, by: \.bucket)
-        return grouped.map { bucket, points in
-            return HealthBucket(
-                bucket: bucket,
-                successfulRequests: points.reduce(0) { $0 + $1.successfulRequests },
-                failedRequests: points.reduce(0) { $0 + $1.failedRequests }
+// MARK: - Service Health Heatmap
+
+/// Fixed last-7-days SwiftUI heatmap.
+/// Grid: 168 columns (7 days × 24 hours) × 6 rows (10-minute buckets per hour) = 1,008 cells.
+/// No Swift Charts axis overhead — pure SwiftUI layout.
+private struct ServiceHealthHeatmap: View {
+    let snapshot: UsageSnapshot
+    private let buckets: [HealthBucket]
+
+    init(snapshot: UsageSnapshot) {
+        self.snapshot = snapshot
+        self.buckets = UsageAggregator.healthBuckets(
+            from: snapshot.events,
+            now: snapshot.generatedAt ?? Date(),
+            calendar: Calendar.current
+        )
+    }
+
+    private static let days = 7
+    private static let hoursPerDay = 24
+    private static let bucketsPerHour = 6
+    private static let totalColumns = days * hoursPerDay
+    private static let totalRows = bucketsPerHour
+
+    private var overallHealthPercent: Double {
+        let total = snapshot.summary.totalRequests
+        guard total > 0 else { return 1.0 }
+        return Double(snapshot.summary.successfulRequests) / Double(total)
+    }
+
+    var body: some View {
+        if snapshot.trends.isEmpty && snapshot.events.isEmpty {
+            DashboardEmptyStateView(
+                title: "暂无健康趋势",
+                message: "当前时间范围没有可绘制的请求记录。",
+                systemImage: "waveform.path.ecg"
             )
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                heatmapHeader
+                heatmapGrid
+                heatmapFooter
+            }
         }
-        .sorted { $0.bucket < $1.bucket }
+    }
+
+    // MARK: - Header
+
+    private var heatmapHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text("最近 7 天")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(DashboardTheme.mutedInk)
+
+            Spacer(minLength: 8)
+
+            Text("整体健康  ")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(DashboardTheme.softInk)
+
+            Text(UsageFormatters.percent(overallHealthPercent))
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(healthColor(overallHealthPercent))
+        }
+    }
+
+    // MARK: - Grid
+
+    /// Fixed cell height so the overall grid height is predictable.
+    private static let cellH: CGFloat = 5
+    private static let hSpacing: CGFloat = 1.5
+    private static let vSpacing: CGFloat = 1.5
+    private static let gridHeight: CGFloat = CGFloat(totalRows) * cellH + CGFloat(totalRows - 1) * vSpacing
+
+    private var heatmapGrid: some View {
+        GeometryReader { geo in
+            let totalCols = Self.totalColumns
+            let totalRows = Self.totalRows
+            let hSpacing = Self.hSpacing
+            let vSpacing = Self.vSpacing
+            let cellH = Self.cellH
+            let cellW = max(1.5, (geo.size.width - hSpacing * CGFloat(totalCols - 1)) / CGFloat(totalCols))
+
+            Canvas { context, _ in
+                for col in 0 ..< totalCols {
+                    for row in 0 ..< totalRows {
+                        let index = col * totalRows + row
+                        guard index < buckets.count else { continue }
+                        let bucket = buckets[index]
+                        let x = CGFloat(col) * (cellW + hSpacing)
+                        let y = CGFloat(row) * (cellH + vSpacing)
+                        let rect = CGRect(x: x, y: y, width: cellW, height: cellH)
+                        let path = Path(roundedRect: rect, cornerRadius: 1.5)
+                        context.fill(path, with: .color(cellColor(bucket)))
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.gridHeight)
+    }
+
+    // MARK: - Footer
+
+    private var heatmapFooter: some View {
+        HStack(spacing: 0) {
+            Text("7 天前")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(DashboardTheme.softInk)
+
+            Spacer(minLength: 4)
+
+            // Color legend
+            HStack(spacing: 4) {
+                ForEach(HealthTone.allCases, id: \.self) { tone in
+                    HStack(spacing: 3) {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(tone.color)
+                            .frame(width: 9, height: 9)
+                        Text(tone.label)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(DashboardTheme.softInk)
+                    }
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Text("最新")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(DashboardTheme.softInk)
+        }
+    }
+
+    private func cellColor(_ bucket: HealthBucket) -> Color {
+        switch bucket.status {
+        case .noData:
+            DashboardTheme.hairline.opacity(0.6)
+        case .healthy:
+            DashboardTheme.green
+        case .warning:
+            DashboardTheme.yellow
+        case .degraded:
+            DashboardTheme.orange
+        case .failed:
+            DashboardTheme.red
+        }
+    }
+
+    private func healthColor(_ rate: Double) -> Color {
+        switch rate {
+        case 0.95...: DashboardTheme.green
+        case 0.80...: DashboardTheme.yellow
+        default: DashboardTheme.red
+        }
     }
 }
+
+// MARK: - Health Tone
+
+private enum HealthTone: CaseIterable {
+    case perfect
+    case good
+    case fair
+    case poor
+    case critical
+    case empty
+
+    var color: Color {
+        switch self {
+        case .perfect: DashboardTheme.green
+        case .good: Color(red: 0.35, green: 0.78, blue: 0.52)
+        case .fair: DashboardTheme.yellow
+        case .poor: DashboardTheme.orange
+        case .critical: DashboardTheme.red
+        case .empty: DashboardTheme.hairline
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .perfect: "100%"
+        case .good: "≥95%"
+        case .fair: "≥80%"
+        case .poor: "≥50%"
+        case .critical: "<50%"
+        case .empty: ""
+        }
+    }
+
+    // CaseIterable for legend — exclude .empty
+    static var allCases: [HealthTone] {
+        [.perfect, .good, .fair, .poor, .critical]
+    }
+}
+
+// MARK: - Supporting Types
+
+// MARK: - Supporting Views
 
 private struct HealthFactRow: View {
     let title: String
@@ -128,11 +289,4 @@ private struct HealthFactRow: View {
         .font(.caption)
         .frame(minWidth: 190)
     }
-}
-
-private struct HealthBucket: Identifiable {
-    var id: Date { bucket }
-    let bucket: Date
-    let successfulRequests: Int
-    let failedRequests: Int
 }

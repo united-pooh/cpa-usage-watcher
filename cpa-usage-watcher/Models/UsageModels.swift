@@ -1,6 +1,6 @@
 import Foundation
 
-enum UsageTimeRange: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum UsageTimeRange: String, CaseIterable, Identifiable, Codable, Hashable {
     case all
     case last7Hours
     case last24Hours
@@ -64,7 +64,7 @@ enum UsageTimeRange: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum TrendGranularity: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum TrendGranularity: String, CaseIterable, Identifiable, Codable, Hashable {
     case hour
     case day
 
@@ -80,7 +80,7 @@ enum TrendGranularity: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum DisplayCurrency: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum DisplayCurrency: String, CaseIterable, Identifiable, Codable, Hashable {
     case usd = "USD"
     case cny = "CNY"
 
@@ -116,7 +116,7 @@ enum DisplayCurrency: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum CostCalculationBasis: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum CostCalculationBasis: String, CaseIterable, Identifiable, Codable, Hashable {
     case saved
     case estimate
 
@@ -134,7 +134,7 @@ enum CostCalculationBasis: String, CaseIterable, Identifiable, Codable, Hashable
     }
 }
 
-struct UsageCostDisplaySettings: Codable, Hashable {
+nonisolated struct UsageCostDisplaySettings: Codable, Hashable {
     static let defaultUSDToCNYExchangeRate = 7.18
     static let `default` = UsageCostDisplaySettings()
 
@@ -185,7 +185,7 @@ struct UsageCostDisplaySettings: Codable, Hashable {
     }
 }
 
-enum UsageLoadState: Equatable {
+nonisolated enum UsageLoadState: Equatable {
     case idle
     case loading
     case loaded
@@ -239,7 +239,7 @@ nonisolated struct ConnectionSettings: Codable, Hashable {
     }
 }
 
-struct UsageSummary: Codable, Hashable {
+nonisolated struct UsageSummary: Codable, Hashable {
     var totalRequests: Int
     var successfulRequests: Int
     var failedRequests: Int
@@ -334,7 +334,7 @@ struct UsageSummary: Codable, Hashable {
     }
 }
 
-struct EndpointModelStat: Identifiable, Codable, Hashable {
+nonisolated struct EndpointModelStat: Identifiable, Codable, Hashable {
     var id: String { "\(endpoint)|\(model)" }
     var endpoint: String
     var model: String
@@ -407,7 +407,7 @@ struct EndpointModelStat: Identifiable, Codable, Hashable {
     }
 }
 
-struct EndpointUsageStat: Identifiable, Codable, Hashable {
+nonisolated struct EndpointUsageStat: Identifiable, Codable, Hashable {
     var id: String { endpoint }
     var endpoint: String
     var requests: Int
@@ -480,7 +480,7 @@ struct EndpointUsageStat: Identifiable, Codable, Hashable {
     }
 }
 
-struct ModelUsageStat: Identifiable, Codable, Hashable {
+nonisolated struct ModelUsageStat: Identifiable, Codable, Hashable {
     var id: String { model }
     var model: String
     var requests: Int
@@ -553,7 +553,7 @@ struct ModelUsageStat: Identifiable, Codable, Hashable {
     }
 }
 
-struct RequestEvent: Identifiable, Codable, Hashable {
+nonisolated struct RequestEvent: Identifiable, Codable, Hashable {
     var id: String
     var timestamp: Date
     var endpoint: String
@@ -570,6 +570,7 @@ struct RequestEvent: Identifiable, Codable, Hashable {
     var reasoningTokens: Int
     var cachedTokens: Int
     var totalTokens: Int
+    var estimatedCost: Double?
     var metadata: [String: JSONValue]
 
     var resultTitle: String {
@@ -597,6 +598,7 @@ struct RequestEvent: Identifiable, Codable, Hashable {
         reasoningTokens: Int = 0,
         cachedTokens: Int = 0,
         totalTokens: Int = 0,
+        estimatedCost: Double? = nil,
         metadata: [String: JSONValue] = [:]
     ) {
         self.id = id
@@ -615,6 +617,7 @@ struct RequestEvent: Identifiable, Codable, Hashable {
         self.reasoningTokens = reasoningTokens
         self.cachedTokens = cachedTokens
         self.totalTokens = totalTokens
+        self.estimatedCost = estimatedCost
         self.metadata = metadata
     }
 
@@ -635,6 +638,7 @@ struct RequestEvent: Identifiable, Codable, Hashable {
         case reasoningTokens
         case cachedTokens
         case totalTokens
+        case estimatedCost
         case metadata
     }
 
@@ -657,12 +661,13 @@ struct RequestEvent: Identifiable, Codable, Hashable {
             reasoningTokens: container.decodeInt(.reasoningTokens),
             cachedTokens: container.decodeInt(.cachedTokens),
             totalTokens: container.decodeInt(.totalTokens),
+            estimatedCost: container.decodeOptionalDouble(.estimatedCost),
             metadata: container.decodeJSONDictionary(.metadata)
         )
     }
 }
 
-struct CredentialUsageStat: Identifiable, Codable, Hashable {
+nonisolated struct CredentialUsageStat: Identifiable, Codable, Hashable {
     var id: String {
         [credential, source, provider]
             .filter { !$0.isEmpty }
@@ -740,7 +745,7 @@ struct CredentialUsageStat: Identifiable, Codable, Hashable {
     }
 }
 
-struct ModelPriceSetting: Identifiable, Codable, Hashable {
+nonisolated struct ModelPriceSetting: Identifiable, Codable, Hashable {
     static let storedCurrency: DisplayCurrency = .usd
 
     var id: String { model }
@@ -863,7 +868,7 @@ struct ModelPriceSetting: Identifiable, Codable, Hashable {
     }
 }
 
-struct ModelPriceDraft: Codable, Hashable {
+nonisolated struct ModelPriceDraft: Codable, Hashable {
     var model: String
     var promptPricePerMillion: Double
     var completionPricePerMillion: Double
@@ -904,7 +909,7 @@ struct ModelPriceDraft: Codable, Hashable {
     }
 }
 
-struct UsageTrendPoint: Identifiable, Codable, Hashable {
+nonisolated struct UsageTrendPoint: Identifiable, Codable, Hashable {
     var id: String { "\(bucket.timeIntervalSince1970)-\(model)" }
     var bucket: Date
     var model: String
@@ -988,12 +993,13 @@ struct UsageTrendPoint: Identifiable, Codable, Hashable {
     }
 }
 
-struct UsageSnapshot: Codable, Hashable {
+nonisolated struct UsageSnapshot: Codable, Hashable {
     var summary: UsageSummary
     var endpoints: [EndpointUsageStat]
     var models: [ModelUsageStat]
     var events: [RequestEvent]
     var credentials: [CredentialUsageStat]
+    var credentialQuotas: [CredentialQuotaSnapshot]
     var trends: [UsageTrendPoint]
     var timeRange: UsageTimeRange
     var generatedAt: Date?
@@ -1008,6 +1014,7 @@ struct UsageSnapshot: Codable, Hashable {
         models: [ModelUsageStat] = [],
         events: [RequestEvent] = [],
         credentials: [CredentialUsageStat] = [],
+        credentialQuotas: [CredentialQuotaSnapshot] = [],
         trends: [UsageTrendPoint] = [],
         timeRange: UsageTimeRange = .defaultSelection,
         generatedAt: Date? = nil,
@@ -1019,6 +1026,7 @@ struct UsageSnapshot: Codable, Hashable {
         self.models = models
         self.events = events
         self.credentials = credentials
+        self.credentialQuotas = credentialQuotas
         self.trends = trends
         self.timeRange = timeRange
         self.generatedAt = generatedAt
@@ -1032,6 +1040,7 @@ struct UsageSnapshot: Codable, Hashable {
         case models
         case events
         case credentials
+        case credentialQuotas
         case trends
         case timeRange
         case generatedAt
@@ -1047,6 +1056,7 @@ struct UsageSnapshot: Codable, Hashable {
             models: container.decodeArray([ModelUsageStat].self, forKey: .models),
             events: container.decodeArray([RequestEvent].self, forKey: .events),
             credentials: container.decodeArray([CredentialUsageStat].self, forKey: .credentials),
+            credentialQuotas: container.decodeArray([CredentialQuotaSnapshot].self, forKey: .credentialQuotas),
             trends: container.decodeArray([UsageTrendPoint].self, forKey: .trends),
             timeRange: container.decode(UsageTimeRange.self, forKey: .timeRange, default: .defaultSelection),
             generatedAt: container.decodeOptionalDate(.generatedAt),
@@ -1056,7 +1066,7 @@ struct UsageSnapshot: Codable, Hashable {
     }
 }
 
-struct RequestEventFilters: Codable, Hashable {
+nonisolated struct RequestEventFilters: Codable, Hashable {
     var model: String
     var source: String
     var authIndex: String
@@ -1089,7 +1099,7 @@ struct RequestEventFilters: Codable, Hashable {
     }
 }
 
-enum UsageSortDirection: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum UsageSortDirection: String, CaseIterable, Identifiable, Codable, Hashable {
     case ascending
     case descending
 
@@ -1105,7 +1115,7 @@ enum UsageSortDirection: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum EndpointSort: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum EndpointSort: String, CaseIterable, Identifiable, Codable, Hashable {
     case endpoint
     case requests
     case tokens
@@ -1127,7 +1137,7 @@ enum EndpointSort: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum ModelSort: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum ModelSort: String, CaseIterable, Identifiable, Codable, Hashable {
     case model
     case requests
     case tokens
@@ -1158,7 +1168,7 @@ enum ModelSort: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum EventSort: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum EventSort: String, CaseIterable, Identifiable, Codable, Hashable {
     case time
     case model
     case source
@@ -1189,7 +1199,7 @@ enum EventSort: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum CredentialSort: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum CredentialSort: String, CaseIterable, Identifiable, Codable, Hashable {
     case credential
     case provider
     case requests
@@ -1214,7 +1224,7 @@ enum CredentialSort: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum ModelPriceSort: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum ModelPriceSort: String, CaseIterable, Identifiable, Codable, Hashable {
     case model
     case promptPrice
     case completionPrice
@@ -1236,7 +1246,7 @@ enum ModelPriceSort: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum UsageChartMetric: String, CaseIterable, Identifiable, Codable, Hashable {
+nonisolated enum UsageChartMetric: String, CaseIterable, Identifiable, Codable, Hashable {
     case requests
     case tokens
     case inputTokens
@@ -1270,7 +1280,7 @@ enum UsageChartMetric: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-struct EndpointSortState: Codable, Hashable {
+nonisolated struct EndpointSortState: Codable, Hashable {
     var column: EndpointSort
     var direction: UsageSortDirection
 
@@ -1293,7 +1303,7 @@ struct EndpointSortState: Codable, Hashable {
     }
 }
 
-struct ModelSortState: Codable, Hashable {
+nonisolated struct ModelSortState: Codable, Hashable {
     var column: ModelSort
     var direction: UsageSortDirection
 
@@ -1316,7 +1326,7 @@ struct ModelSortState: Codable, Hashable {
     }
 }
 
-struct EventSortState: Codable, Hashable {
+nonisolated struct EventSortState: Codable, Hashable {
     var column: EventSort
     var direction: UsageSortDirection
 
@@ -1339,7 +1349,7 @@ struct EventSortState: Codable, Hashable {
     }
 }
 
-struct CredentialSortState: Codable, Hashable {
+nonisolated struct CredentialSortState: Codable, Hashable {
     var column: CredentialSort
     var direction: UsageSortDirection
 
@@ -1362,7 +1372,7 @@ struct CredentialSortState: Codable, Hashable {
     }
 }
 
-struct ModelPriceSortState: Codable, Hashable {
+nonisolated struct ModelPriceSortState: Codable, Hashable {
     var column: ModelPriceSort
     var direction: UsageSortDirection
 
@@ -1385,7 +1395,7 @@ struct ModelPriceSortState: Codable, Hashable {
     }
 }
 
-struct ChartSeriesSelection: Codable, Hashable {
+nonisolated struct ChartSeriesSelection: Codable, Hashable {
     static let maxSelectedModels = 9
 
     var selectedModels: Set<String>
@@ -1423,7 +1433,7 @@ struct ChartSeriesSelection: Codable, Hashable {
     }
 }
 
-struct UsageRawPayload: Codable, Hashable {
+nonisolated struct UsageRawPayload: Codable, Hashable {
     var root: JSONValue
 
     init(root: JSONValue = .object([:])) {
@@ -1465,7 +1475,146 @@ struct UsageRawPayload: Codable, Hashable {
     }
 }
 
-struct UsageImportResult: Codable, Hashable {
+
+nonisolated struct UsageRefreshSettings: Codable, Hashable {
+    static let minimumIntervalSeconds = 10
+    static let maximumIntervalSeconds = 3600
+    static let defaultValue = UsageRefreshSettings()
+
+    var isAutoRefreshEnabled: Bool
+    var intervalSeconds: Int
+
+    init(isAutoRefreshEnabled: Bool = true, intervalSeconds: Int = 60) {
+        self.isAutoRefreshEnabled = isAutoRefreshEnabled
+        self.intervalSeconds = Self.sanitizedInterval(intervalSeconds)
+    }
+
+    static func sanitizedInterval(_ value: Int) -> Int {
+        min(max(value, minimumIntervalSeconds), maximumIntervalSeconds)
+    }
+
+    func updatingInterval(_ value: Int) -> UsageRefreshSettings {
+        UsageRefreshSettings(isAutoRefreshEnabled: isAutoRefreshEnabled, intervalSeconds: value)
+    }
+}
+
+nonisolated struct CredentialQuotaUsage: Identifiable, Codable, Hashable {
+    var id: String
+    var title: String
+    var used: Double?
+    var limit: Double?
+    var remaining: Double?
+    var usagePercent: Double?
+    var resetAt: Date?
+
+    init(
+        id: String = UUID().uuidString,
+        title: String,
+        used: Double? = nil,
+        limit: Double? = nil,
+        remaining: Double? = nil,
+        usagePercent: Double? = nil,
+        resetAt: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.used = used
+        self.limit = limit
+        self.remaining = remaining
+        self.usagePercent = usagePercent.map { min(max($0, 0), 1) } ?? Self.percent(used: used, limit: limit, remaining: remaining)
+        self.resetAt = resetAt
+    }
+
+    private static func percent(used: Double?, limit: Double?, remaining: Double?) -> Double? {
+        if let used, let limit, limit > 0 {
+            return min(max(used / limit, 0), 1)
+        }
+        if let remaining, let limit, limit > 0 {
+            return min(max((limit - remaining) / limit, 0), 1)
+        }
+        return nil
+    }
+}
+
+nonisolated struct CredentialQuotaSnapshot: Identifiable, Codable, Hashable {
+    var id: String
+    var credential: String
+    var source: String
+    var provider: String
+    var providerTitle: String
+    var planTitle: String
+    var shortWindow: CredentialQuotaUsage?
+    var longWindow: CredentialQuotaUsage?
+    var capturedAt: Date
+    var rawMetadata: [String: JSONValue]
+
+    init(
+        id: String = UUID().uuidString,
+        credential: String,
+        source: String = "",
+        provider: String = "",
+        providerTitle: String = "",
+        planTitle: String = "",
+        shortWindow: CredentialQuotaUsage? = nil,
+        longWindow: CredentialQuotaUsage? = nil,
+        capturedAt: Date = Date(timeIntervalSince1970: 0),
+        rawMetadata: [String: JSONValue] = [:]
+    ) {
+        self.id = id
+        self.credential = credential
+        self.source = source
+        self.provider = provider
+        self.providerTitle = providerTitle.isEmpty ? (provider.isEmpty ? source : provider) : providerTitle
+        self.planTitle = planTitle
+        self.shortWindow = shortWindow
+        self.longWindow = longWindow
+        self.capturedAt = capturedAt
+        self.rawMetadata = rawMetadata
+    }
+}
+
+nonisolated enum HealthBucketStatus: String, Codable, Hashable {
+    case noData
+    case healthy
+    case warning
+    case degraded
+    case failed
+}
+
+nonisolated struct HealthBucket: Identifiable, Codable, Hashable {
+    var id: String
+    var start: Date
+    var end: Date
+    var requests: Int
+    var failedRequests: Int
+    var averageLatencyMs: Double
+    var status: HealthBucketStatus
+
+    var successRate: Double {
+        guard requests > 0 else { return 0 }
+        return Double(requests - failedRequests) / Double(requests)
+    }
+
+    init(start: Date, end: Date, requests: Int = 0, failedRequests: Int = 0, averageLatencyMs: Double = 0, status: HealthBucketStatus = .noData) {
+        self.id = String(Int(start.timeIntervalSince1970))
+        self.start = start
+        self.end = end
+        self.requests = requests
+        self.failedRequests = failedRequests
+        self.averageLatencyMs = averageLatencyMs
+        self.status = status
+    }
+}
+
+nonisolated struct TrendHoverPoint: Codable, Hashable {
+    var bucket: Date
+    var series: String
+    var requestCount: Int
+    var tokenCount: Int
+    var cost: Double?
+}
+
+nonisolated struct UsageImportResult: Codable, Hashable {
     var importedCount: Int
     var skippedCount: Int
     var message: String
@@ -1501,7 +1650,7 @@ struct UsageImportResult: Codable, Hashable {
     }
 }
 
-private extension KeyedDecodingContainer {
+private nonisolated extension KeyedDecodingContainer {
     func decode<T: Decodable>(_ type: T.Type, forKey key: Key, default defaultValue: T) -> T {
         (try? decodeIfPresent(type, forKey: key)) ?? defaultValue
     }

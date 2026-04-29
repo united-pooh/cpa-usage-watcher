@@ -236,7 +236,7 @@ enum UsageFormatters {
     }
 }
 
-enum UsageDateParser {
+nonisolated enum UsageDateParser {
     private static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
