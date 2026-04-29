@@ -6,6 +6,9 @@ enum UsageAggregatorTests {
         try verifiesEstimatedCostBasisUsesRecordedCosts()
         try verifiesCLIProxyUsagePayloadPreservesGroupedContext()
         verifiesLatencyFormattingUsesMilliseconds()
+        try verifiesSnapshotFromPersistedEvents()
+        try verifiesHealthBucketsCoverSevenDays()
+        try verifiesQuotaParsingSkipsAPICredentials()
         verifiesSensitiveIdentifierMasking()
     }
 
@@ -208,6 +211,77 @@ enum UsageAggregatorTests {
         TestExpect.equal(failedEvent?.model, "gpt-5.5", "detail rows should inherit model")
         TestExpect.equal(failedEvent?.isSuccess, false, "failed detail rows should be unsuccessful")
         TestExpect.equal(failedEvent?.authIndex, "sk-live", "auth index should survive flattening")
+    }
+
+
+    private static func verifiesSnapshotFromPersistedEvents() throws {
+        let now = try requireDate("2026-04-27T12:00:00Z")
+        let events = [
+            RequestEvent(id: "persisted-1", timestamp: try requireDate("2026-04-27T11:00:00Z"), endpoint: "messages", model: "claude", source: "account", provider: "claude", authIndex: "acct", isSuccess: true, latencyMs: 100, inputTokens: 2, outputTokens: 3, totalTokens: 5),
+            RequestEvent(id: "persisted-2", timestamp: try requireDate("2026-04-26T10:00:00Z"), endpoint: "old", model: "old", isSuccess: true, totalTokens: 99)
+        ]
+
+        let snapshot = UsageAggregator.snapshot(
+            from: events,
+            timeRange: .last24Hours,
+            prices: [ModelPriceSetting(model: "claude", promptPricePerMillion: 1, completionPricePerMillion: 2)],
+            now: now,
+            calendar: Calendar(identifier: .gregorian),
+            costCalculationBasis: .saved
+        )
+        TestExpect.equal(snapshot.summary.totalRequests, 1, "persisted snapshot should respect time range")
+        TestExpect.equal(snapshot.events.first?.id, "persisted-1", "persisted event should be retained")
+        TestExpect.equal(snapshot.sourceDescription, "本地历史记录", "persisted snapshot should describe local source")
+        TestExpect.approx(snapshot.summary.totalCost ?? -1, 0.000008, "persisted snapshot should apply configured prices")
+    }
+
+    private static func verifiesHealthBucketsCoverSevenDays() throws {
+        let now = try requireDate("2026-04-27T12:00:00Z")
+        let buckets = UsageAggregator.healthBuckets(from: [
+            RequestEvent(id: "health-1", timestamp: try requireDate("2026-04-27T11:55:00Z"), isSuccess: false, latencyMs: 12_000)
+        ], now: now, calendar: Calendar(identifier: .gregorian))
+
+        TestExpect.equal(buckets.count, 1008, "7 days of 10-minute buckets should produce 1008 cells")
+        let bucket = buckets.first { $0.requests == 1 }
+        TestExpect.equal(bucket?.status, .failed, "failed slow event should mark bucket failed")
+        TestExpect.equal(bucket?.averageLatencyMs, 12_000, "health bucket should preserve latency")
+    }
+
+    private static func verifiesQuotaParsingSkipsAPICredentials() throws {
+        let payload = try decodePayload(
+            """
+            {
+              "usageDetails": [
+                {
+                  "id": "quota-1",
+                  "timestamp": "2026-04-27T10:00:00Z",
+                  "source": "console-account",
+                  "provider": "anthropic",
+                  "auth_index": "account@example.com",
+                  "success": true,
+                  "quota": {"limit": 100, "used": 25, "window": "5小时", "reset_at": "2026-04-27T15:00:00Z"},
+                  "plan": "Max"
+                },
+                {
+                  "id": "quota-2",
+                  "timestamp": "2026-04-27T10:00:00Z",
+                  "source": "api endpoint",
+                  "provider": "openai",
+                  "auth_index": "sk-live",
+                  "success": true,
+                  "quota": {"limit": 100, "used": 25}
+                }
+              ]
+            }
+            """
+        )
+
+        let snapshots = UsageAggregator.credentialQuotaSnapshots(from: payload, capturedAt: try requireDate("2026-04-27T12:00:00Z"))
+        let snapshot = UsageAggregator.snapshot(from: payload, timeRange: .all, now: try requireDate("2026-04-27T12:00:00Z"))
+        TestExpect.equal(snapshots.count, 1, "quota parser should include non-API credentials only")
+        TestExpect.equal(snapshots.first?.provider, "anthropic", "provider should be preserved")
+        TestExpect.approx(snapshots.first?.shortWindow?.usagePercent ?? -1, 0.25, "usage percent should derive from used/limit")
+        TestExpect.equal(snapshot.credentialQuotas.count, 1, "snapshots should expose shared quota source for UI")
     }
 
     private static func verifiesLatencyFormattingUsesMilliseconds() {

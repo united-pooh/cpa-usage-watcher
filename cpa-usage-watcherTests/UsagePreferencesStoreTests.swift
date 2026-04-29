@@ -8,6 +8,9 @@ enum UsagePreferencesStoreTests {
         try verifiesViewModelDirectExchangeRateSanitizationPersists()
         try verifiesModelPriceSanitizationAndAliasCompatibility()
         try verifiesViewModelCurrencyStateAndDraftSurface()
+        try verifiesRefreshSettingsDefaultsAndPersistence()
+        try verifiesRefreshSettingsIntervalSanitization()
+        try verifiesViewModelRefreshSettingsIntegration()
     }
 
     private static func verifiesCostDisplaySettingsDefaultsAndPersistence() throws {
@@ -221,6 +224,100 @@ enum UsagePreferencesStoreTests {
                 false,
                 "draft matching saved price should not be unsaved"
             )
+        }
+    }
+
+    private static func verifiesRefreshSettingsDefaultsAndPersistence() throws {
+        try withIsolatedDefaults { defaults in
+            let store = UsagePreferencesStore(defaults: defaults)
+
+            let defaultSettings = store.loadRefreshSettings()
+            TestExpect.equal(defaultSettings.isAutoRefreshEnabled, true, "default auto-refresh enabled")
+            TestExpect.equal(defaultSettings.intervalSeconds, 60, "default interval is 60s")
+
+            store.saveRefreshSettings(UsageRefreshSettings(isAutoRefreshEnabled: false, intervalSeconds: 30))
+
+            let reloadedStore = UsagePreferencesStore(defaults: defaults)
+            let reloaded = reloadedStore.loadRefreshSettings()
+            TestExpect.equal(reloaded.isAutoRefreshEnabled, false, "persisted auto-refresh disabled")
+            TestExpect.equal(reloaded.intervalSeconds, 30, "persisted interval")
+        }
+    }
+
+    private static func verifiesRefreshSettingsIntervalSanitization() throws {
+        try withIsolatedDefaults { defaults in
+            let store = UsagePreferencesStore(defaults: defaults)
+
+            store.saveRefreshSettings(UsageRefreshSettings(isAutoRefreshEnabled: true, intervalSeconds: 0))
+            TestExpect.equal(
+                store.loadRefreshSettings().intervalSeconds,
+                UsageRefreshSettings.minimumIntervalSeconds,
+                "interval below minimum should clamp to minimum"
+            )
+            TestExpect.equal(UsageRefreshSettings.sanitizedInterval(5), 10, "5s should clamp to new minimum")
+            TestExpect.equal(UsageRefreshSettings.sanitizedInterval(10), 10, "10s should be accepted")
+
+            store.saveRefreshSettings(UsageRefreshSettings(isAutoRefreshEnabled: true, intervalSeconds: 99999))
+            TestExpect.equal(
+                store.loadRefreshSettings().intervalSeconds,
+                UsageRefreshSettings.maximumIntervalSeconds,
+                "interval above maximum should clamp to maximum"
+            )
+
+            store.saveRefreshSettings(UsageRefreshSettings(isAutoRefreshEnabled: true, intervalSeconds: -5))
+            TestExpect.equal(
+                store.loadRefreshSettings().intervalSeconds,
+                UsageRefreshSettings.minimumIntervalSeconds,
+                "negative interval should clamp to minimum"
+            )
+
+            store.saveRefreshSettings(UsageRefreshSettings(isAutoRefreshEnabled: true, intervalSeconds: 120))
+            TestExpect.equal(store.loadRefreshSettings().intervalSeconds, 120, "valid interval should persist unchanged")
+        }
+    }
+
+    private static func verifiesViewModelRefreshSettingsIntegration() throws {
+        try withIsolatedDefaults { defaults in
+            let preferencesStore = UsagePreferencesStore(defaults: defaults)
+            let connectionStore = ConnectionSettingsStore(
+                defaults: defaults,
+                keychain: InMemoryManagementKeyStore(),
+                baseURLDefaultsKey: "test.connection.baseURL",
+                keychainService: "test.cpa-usage-watcher"
+            )
+            let viewModel = UsageDashboardViewModel(
+                apiClient: UsageAPIClient(requestPerformer: UnusedUsageRequestPerformer()),
+                connectionSettingsStore: connectionStore,
+                preferencesStore: preferencesStore
+            )
+
+            // Default state
+            TestExpect.equal(viewModel.refreshSettings.isAutoRefreshEnabled, true, "vm default auto-refresh enabled")
+            TestExpect.equal(viewModel.refreshSettings.intervalSeconds, 60, "vm default interval")
+            TestExpect.equal(viewModel.refreshIntervalTitle, "自動刷新 · 1m", "vm default interval title")
+
+            // setRefreshIntervalSeconds clamps and persists
+            viewModel.setRefreshIntervalSeconds(0)
+            TestExpect.equal(
+                viewModel.refreshSettings.intervalSeconds,
+                UsageRefreshSettings.minimumIntervalSeconds,
+                "setRefreshIntervalSeconds clamps below minimum"
+            )
+
+            viewModel.setRefreshIntervalSeconds(60)
+            TestExpect.equal(viewModel.refreshSettings.intervalSeconds, 60, "setRefreshIntervalSeconds accepts valid value")
+            TestExpect.equal(viewModel.refreshIntervalTitle, "自動刷新 · 1m", "minute title for 60s interval")
+
+            let persisted = UsagePreferencesStore(defaults: defaults).loadRefreshSettings()
+            TestExpect.equal(persisted.intervalSeconds, 60, "setRefreshIntervalSeconds persists via preferences store")
+
+            // setAutoRefreshEnabled
+            viewModel.setAutoRefreshEnabled(false)
+            TestExpect.equal(viewModel.refreshSettings.isAutoRefreshEnabled, false, "setAutoRefreshEnabled false")
+            TestExpect.equal(viewModel.refreshIntervalTitle, "自動刷新 · 關閉", "disabled auto-refresh title")
+
+            let persistedDisabled = UsagePreferencesStore(defaults: defaults).loadRefreshSettings()
+            TestExpect.equal(persistedDisabled.isAutoRefreshEnabled, false, "disabled state persists")
         }
     }
 
