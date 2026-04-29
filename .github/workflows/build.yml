@@ -1,0 +1,69 @@
+name: Build macOS app
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build release artifact
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build app
+        id: build
+        env:
+          DERIVED_DATA_PATH: ${{ runner.temp }}/DerivedData
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          xcodebuild \
+            -project cpa-usage-watcher.xcodeproj \
+            -target cpa-usage-watcher \
+            -configuration Release \
+            -sdk macosx \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            clean build
+
+          app_path="$DERIVED_DATA_PATH/Build/Products/Release/cpa-usage-watcher.app"
+          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app_path/Contents/Info.plist")
+          build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$app_path/Contents/Info.plist")
+          short_sha="${GITHUB_SHA::7}"
+          artifact_name="cpa-usage-watcher-${version}+${build}-${short_sha}"
+          dmg_root="${RUNNER_TEMP}/dmg-root"
+          dmg_path="${RUNNER_TEMP}/${artifact_name}.dmg"
+
+          mkdir -p "$dmg_root"
+          ditto "$app_path" "$dmg_root/cpa-usage-watcher.app"
+          ln -s /Applications "$dmg_root/Applications"
+          hdiutil create \
+            -volname "cpa-usage-watcher" \
+            -srcfolder "$dmg_root" \
+            -ov \
+            -format UDZO \
+            "$dmg_path"
+
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=$dmg_path" >> "$GITHUB_OUTPUT"
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.artifact_name }}
+          path: ${{ steps.build.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 14
