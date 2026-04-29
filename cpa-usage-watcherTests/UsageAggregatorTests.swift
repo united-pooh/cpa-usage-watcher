@@ -7,6 +7,7 @@ enum UsageAggregatorTests {
         try verifiesCLIProxyUsagePayloadPreservesGroupedContext()
         verifiesLatencyFormattingUsesMilliseconds()
         try verifiesSnapshotFromPersistedEvents()
+        try verifiesPreparedDashboardSnapshotUsesOneEventSet()
         try verifiesHealthBucketsCoverSevenDays()
         try verifiesQuotaParsingSkipsAPICredentials()
         verifiesSensitiveIdentifierMasking()
@@ -233,6 +234,57 @@ enum UsageAggregatorTests {
         TestExpect.equal(snapshot.events.first?.id, "persisted-1", "persisted event should be retained")
         TestExpect.equal(snapshot.sourceDescription, "本地历史记录", "persisted snapshot should describe local source")
         TestExpect.approx(snapshot.summary.totalCost ?? -1, 0.000008, "persisted snapshot should apply configured prices")
+    }
+
+    private static func verifiesPreparedDashboardSnapshotUsesOneEventSet() throws {
+        let payload = try decodePayload(
+            """
+            {
+              "usageDetails": [
+                {
+                  "id": "prepared-1",
+                  "timestamp": "2026-04-27T10:00:00Z",
+                  "endpoint": "/v1/messages",
+                  "model": "claude-sonnet",
+                  "source": "console-account",
+                  "provider": "anthropic",
+                  "auth_index": "account@example.com",
+                  "success": true,
+                  "input_tokens": 100,
+                  "output_tokens": 50,
+                  "total_tokens": 150,
+                  "estimated_cost": 0.12,
+                  "quota": {"limit": 100, "used": 25, "window": "5小时"},
+                  "plan": "Max"
+                },
+                {
+                  "id": "prepared-old",
+                  "timestamp": "2026-04-25T10:00:00Z",
+                  "endpoint": "/v1/old",
+                  "model": "old-model",
+                  "success": true
+                }
+              ]
+            }
+            """
+        )
+        let now = try requireDate("2026-04-27T12:00:00Z")
+        let prepared = UsageAggregator.preparedDashboardSnapshot(
+            from: payload,
+            timeRange: .last24Hours,
+            now: now,
+            calendar: Calendar(identifier: .gregorian),
+            trendGranularity: .hour,
+            costCalculationBasis: .estimate
+        )
+
+        TestExpect.equal(prepared.events.map(\.id), ["prepared-1"], "prepared events should respect the selected time range")
+        TestExpect.equal(prepared.snapshot.events.map(\.id), ["prepared-1"], "prepared snapshot should use the same event ids")
+        TestExpect.equal(prepared.snapshot.events.allSatisfy { $0.metadata.isEmpty }, true, "prepared UI snapshot should mirror the hot SQLite metadata-free path")
+        TestExpect.equal(prepared.events.first?.metadata.isEmpty, false, "prepared persistence events should retain metadata for the cold table")
+        TestExpect.equal(prepared.quotaSnapshots.count, 1, "prepared helper should carry quota snapshots for persistence and UI")
+        TestExpect.equal(prepared.snapshot.credentialQuotas, prepared.quotaSnapshots, "prepared snapshot should use the same quota snapshots as persistence")
+        TestExpect.approx(prepared.snapshot.summary.totalCost ?? -1, 0.12, "prepared snapshot should honor estimate cost basis")
     }
 
     private static func verifiesHealthBucketsCoverSevenDays() throws {

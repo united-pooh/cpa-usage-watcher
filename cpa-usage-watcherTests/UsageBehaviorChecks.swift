@@ -35,6 +35,7 @@ enum UsageBehaviorChecks {
         try UsageExportServiceTests.run()
         try UsagePreferencesStoreTests.run()
         try UsageSQLiteStoreTests.run()
+        try await UsagePersistenceCoordinatorTests.run()
         try await UsageDashboardViewModelTests.run()
         print("Usage behavior checks passed")
     }

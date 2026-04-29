@@ -5,6 +5,11 @@ enum UsageDashboardViewModelTests {
     static func run() async throws {
         try await refreshPersistsAndRebuildsFromSQLite()
         try await importPersistsUploadedPayloadWhenResponseIsStatusOnly()
+        try await refreshPublishesBeforePersistenceCompletes()
+        try await importPublishesBeforePersistenceCompletes()
+        try await refreshKeepsSnapshotWhenPersistenceFails()
+        try await importKeepsSnapshotWhenPersistenceFails()
+        try await refreshPublishPathStaysUnder100Milliseconds()
         try startupLoadsPersistedEventsWithoutNetwork()
         try selectedTimeRangeReloadsPersistedEmptyRange()
         try startupDashboardSnapshotMatchesStoreDashboardSnapshot()
@@ -17,9 +22,12 @@ enum UsageDashboardViewModelTests {
 
             await viewModel.refresh()
 
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["refresh-1"], "refresh should publish fetched snapshot before persistence drains")
+            TestExpect.equal(viewModel.loadState, .loaded, "refresh should finish UI state before persistence drains")
+            await viewModel.waitForPendingPersistence()
+
             let persistedEvents = try store.events(in: .all)
             TestExpect.equal(persistedEvents.map(\.id), ["refresh-1"], "refresh should persist fetched events")
-            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["refresh-1"], "refresh should rebuild snapshot from SQLite")
             TestExpect.equal(try performer.requestCount(), 1, "refresh should perform one network request")
         }
     }
@@ -30,11 +38,123 @@ enum UsageDashboardViewModelTests {
 
             _ = try await viewModel.importUsage(Data(usageJSON(id: "import-1", timestamp: "2026-04-27T10:00:00Z").utf8))
 
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["import-1"], "status-only import should publish uploaded usage JSON before persistence drains")
+            await viewModel.waitForPendingPersistence()
+
             let persistedEvents = try store.events(in: .all)
             TestExpect.equal(persistedEvents.map(\.id), ["import-1"], "status-only import should persist uploaded usage JSON")
-            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["import-1"], "status-only import should rebuild from SQLite")
             TestExpect.equal(try performer.requestCount(), 1, "import should not force a follow-up refresh")
         }
+    }
+
+    private static func refreshPublishesBeforePersistenceCompletes() async throws {
+        try await withHarness(responseJSON: usageJSON(id: "refresh-pending", timestamp: "2026-04-27T10:00:00Z")) { _, store, performer, _ in
+            let coordinator = RecordingPersistenceCoordinator()
+            let viewModel = makeViewModel(store: store, performer: performer, persistenceCoordinator: coordinator)
+            viewModel.connectionSettings = ConnectionSettings(baseURL: "http://localhost:8317/v0/management", managementKey: "secret")
+
+            await viewModel.refresh()
+
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["refresh-pending"], "refresh should publish snapshot while persistence is only enqueued")
+            TestExpect.equal(viewModel.loadState, .loaded, "refresh should be loaded while persistence is only enqueued")
+            TestExpect.equal(coordinator.jobs.map { $0.events.map(\.id) }, [["refresh-pending"]], "refresh should enqueue persistence job")
+            TestExpect.equal(try store.events(in: .all).isEmpty, true, "fake pending persistence should leave SQLite untouched")
+
+            viewModel.setCostCalculationBasis(.estimate)
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["refresh-pending"], "settings rebuild should keep the just-published snapshot while persistence is pending")
+
+            viewModel.selectedTimeRange = .all
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["refresh-pending"], "time range rebuild should keep the live payload while persistence is pending")
+        }
+    }
+
+    private static func importPublishesBeforePersistenceCompletes() async throws {
+        try await withHarness(responseJSON: #"{"message":"ok","imported":1}"#) { _, store, performer, _ in
+            let coordinator = RecordingPersistenceCoordinator()
+            let viewModel = makeViewModel(store: store, performer: performer, persistenceCoordinator: coordinator)
+            viewModel.connectionSettings = ConnectionSettings(baseURL: "http://localhost:8317/v0/management", managementKey: "secret")
+
+            _ = try await viewModel.importUsage(Data(usageJSON(id: "import-pending", timestamp: "2026-04-27T10:00:00Z").utf8))
+
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["import-pending"], "import should publish uploaded snapshot while persistence is only enqueued")
+            TestExpect.equal(coordinator.jobs.map { $0.events.map(\.id) }, [["import-pending"]], "import should enqueue persistence job")
+            TestExpect.equal(try store.events(in: .all).isEmpty, true, "fake pending import persistence should leave SQLite untouched")
+        }
+    }
+
+    private static func refreshKeepsSnapshotWhenPersistenceFails() async throws {
+        try await withHarness(responseJSON: usageJSON(id: "refresh-failure", timestamp: "2026-04-27T10:00:00Z")) { _, store, performer, _ in
+            let coordinator = RecordingPersistenceCoordinator(errorOnEnqueue: TestFailure("synthetic persistence failure"))
+            let viewModel = makeViewModel(store: store, performer: performer, persistenceCoordinator: coordinator)
+            viewModel.connectionSettings = ConnectionSettings(baseURL: "http://localhost:8317/v0/management", managementKey: "secret")
+
+            await viewModel.refresh()
+
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["refresh-failure"], "refresh should keep snapshot when persistence fails later")
+            TestExpect.equal(viewModel.loadState, .loaded, "refresh should not become a UI failure when persistence fails later")
+            TestExpect.equal(viewModel.errorMessage, nil, "refresh should not surface queued persistence failure as request error")
+            TestExpect.equal(coordinator.lastPersistenceError() != nil, true, "fake coordinator should capture persistence failure")
+        }
+    }
+
+    private static func importKeepsSnapshotWhenPersistenceFails() async throws {
+        try await withHarness(responseJSON: #"{"message":"ok","imported":1}"#) { _, store, performer, _ in
+            let coordinator = RecordingPersistenceCoordinator(errorOnEnqueue: TestFailure("synthetic import persistence failure"))
+            let viewModel = makeViewModel(store: store, performer: performer, persistenceCoordinator: coordinator)
+            viewModel.connectionSettings = ConnectionSettings(baseURL: "http://localhost:8317/v0/management", managementKey: "secret")
+
+            _ = try await viewModel.importUsage(Data(usageJSON(id: "import-failure", timestamp: "2026-04-27T10:00:00Z").utf8))
+
+            TestExpect.equal(viewModel.snapshot.events.map(\.id), ["import-failure"], "import should keep snapshot when persistence fails later")
+            TestExpect.equal(viewModel.errorMessage, nil, "import should not surface queued persistence failure as request error")
+            TestExpect.equal(coordinator.lastPersistenceError() != nil, true, "fake coordinator should capture import persistence failure")
+        }
+    }
+
+    private static func refreshPublishPathStaysUnder100Milliseconds() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["CPA_USAGE_SKIP_BENCHMARK"] == "1" ||
+            (environment["CI"] != nil && environment["CPA_USAGE_STRICT_BENCHMARK"] != "1") {
+            print("Skipping refresh publish benchmark; set CPA_USAGE_STRICT_BENCHMARK=1 to run it in CI.")
+            return
+        }
+
+        let suiteName = "UsageDashboardViewModelTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            throw TestFailure("Unable to create isolated UserDefaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let preferencesStore = UsagePreferencesStore(defaults: defaults)
+        preferencesStore.saveSelectedTimeRange(.last24Hours)
+        let performer = ViewModelRequestPerformer(data: Data(seededUsageJSON(count: 50).utf8))
+        let store = try makeStore()
+        let coordinator = RecordingPersistenceCoordinator()
+        let viewModel = makeViewModel(
+            store: store,
+            performer: performer,
+            preferencesStore: preferencesStore,
+            persistenceCoordinator: coordinator
+        )
+        viewModel.connectionSettings = ConnectionSettings(baseURL: "http://localhost:8317/v0/management", managementKey: "secret")
+
+        await viewModel.refresh()
+
+        guard let networkReturnTime = performer.lastReturnTime else {
+            throw TestFailure("Refresh benchmark did not observe mocked network return")
+        }
+        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - networkReturnTime.uptimeNanoseconds) / 1_000_000
+        let threshold = environment["CPA_USAGE_REFRESH_PUBLISH_BENCHMARK_MS"].flatMap(Double.init) ?? 100
+        print("refresh publish benchmark: \(String(format: "%.2f", elapsedMs))ms")
+        if elapsedMs >= threshold {
+            TestExpect.fail("refresh publish path should stay under \(threshold)ms, got \(String(format: "%.2f", elapsedMs))ms")
+        }
+        TestExpect.equal(viewModel.snapshot.events.count, 50, "benchmark refresh should publish seeded events")
+        TestExpect.equal(coordinator.jobs.count, 1, "benchmark refresh should enqueue one persistence job")
+        TestExpect.equal(coordinator.waitCallCount, 0, "refresh should not wait for queued persistence before publishing")
     }
 
     private static func startupLoadsPersistedEventsWithoutNetwork() throws {
@@ -147,7 +267,8 @@ enum UsageDashboardViewModelTests {
         store: UsageSQLiteStore,
         performer: ViewModelRequestPerformer = ViewModelRequestPerformer(data: Data(#"{"usageDetails":[]}"#.utf8)),
         preferencesStore: UsagePreferencesStore? = nil,
-        keyStore: ViewModelTestKeyStore = ViewModelTestKeyStore()
+        keyStore: ViewModelTestKeyStore = ViewModelTestKeyStore(),
+        persistenceCoordinator: UsagePersistenceCoordinating? = nil
     ) -> UsageDashboardViewModel {
         let preferencesStore = preferencesStore ?? UsagePreferencesStore(defaults: UserDefaults(suiteName: "UsageDashboardViewModelTests.\(UUID().uuidString)") ?? .standard)
         let connectionStore = ConnectionSettingsStore(
@@ -161,6 +282,7 @@ enum UsageDashboardViewModelTests {
             connectionSettingsStore: connectionStore,
             preferencesStore: preferencesStore,
             sqliteStore: store,
+            persistenceCoordinator: persistenceCoordinator,
             calendar: Calendar(identifier: .gregorian),
             now: { fixedNow }
         )
@@ -251,6 +373,16 @@ enum UsageDashboardViewModelTests {
         """
     }
 
+    private static func seededUsageJSON(count: Int) -> String {
+        let records = (0..<count).map { index in
+            let minute = String(format: "%02d", index % 60)
+            return """
+            {"id":"seed-\(index)","timestamp":"2026-04-27T10:\(minute):00Z","endpoint":"/v1/messages","model":"model-\(index % 4)","source":"account-\(index % 5)","provider":"provider-\(index % 3)","authIndex":"key-\(index % 7)","success":\(index % 17 == 0 ? "false" : "true"),"latencyMs":\(100 + index % 900),"inputTokens":\(index % 100),"outputTokens":\(index % 80),"cachedTokens":\(index % 20),"totalTokens":\((index % 100) + (index % 80) + (index % 20)),"estimated_cost":\(Double(index % 100) / 100_000)}
+            """
+        }
+        return #"{"usageDetails":["# + records.joined(separator: ",") + "]}"
+    }
+
     private static let fixedNow = Date(timeIntervalSince1970: 1_777_290_400)
 
     private static func requireDate(_ value: String) throws -> Date {
@@ -263,6 +395,7 @@ enum UsageDashboardViewModelTests {
 
 private final class ViewModelRequestPerformer: UsageRequestPerforming {
     var data: Data
+    private(set) var lastReturnTime: DispatchTime?
     private var requests: [URLRequest] = []
 
     init(data: Data) {
@@ -277,11 +410,51 @@ private final class ViewModelRequestPerformer: UsageRequestPerforming {
             httpVersion: nil,
             headerFields: ["Content-Type": "application/json"]
         )!
+        lastReturnTime = DispatchTime.now()
         return (data, response)
     }
 
     func requestCount() throws -> Int {
         requests.count
+    }
+}
+
+private final class RecordingPersistenceCoordinator: UsagePersistenceCoordinating {
+    private(set) var jobs: [UsagePersistenceJob] = []
+    private(set) var waitCallCount = 0
+    private var persistenceError: Error?
+    private let errorOnEnqueue: Error?
+
+    init(
+        errorOnEnqueue: Error? = nil
+    ) {
+        self.errorOnEnqueue = errorOnEnqueue
+    }
+
+    func dashboardSnapshot(
+        in timeRange: UsageTimeRange,
+        prices: [ModelPriceSetting],
+        basis: CostCalculationBasis,
+        now: Date,
+        calendar: Calendar,
+        trendGranularity: TrendGranularity?
+    ) throws -> UsageSnapshot {
+        UsageSnapshot(timeRange: timeRange)
+    }
+
+    func enqueue(_ job: UsagePersistenceJob) {
+        jobs.append(job)
+        if let errorOnEnqueue {
+            persistenceError = errorOnEnqueue
+        }
+    }
+
+    func waitForPendingWrites() async {
+        waitCallCount += 1
+    }
+
+    func lastPersistenceError() -> Error? {
+        persistenceError
     }
 }
 

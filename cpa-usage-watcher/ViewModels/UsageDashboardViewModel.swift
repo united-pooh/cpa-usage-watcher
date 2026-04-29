@@ -183,7 +183,7 @@ final class UsageDashboardViewModel: ObservableObject {
     private let apiClient: UsageAPIClient
     private let connectionSettingsStore: ConnectionSettingsStore
     private let preferencesStore: UsagePreferencesStore
-    private let sqliteStore: UsageSQLiteStore?
+    private let persistenceCoordinator: UsagePersistenceCoordinating?
     private let calendar: Calendar
     private let now: () -> Date
     private var isSanitizingExchangeRate = false
@@ -194,17 +194,21 @@ final class UsageDashboardViewModel: ObservableObject {
         connectionSettingsStore: ConnectionSettingsStore? = nil,
         preferencesStore: UsagePreferencesStore? = nil,
         sqliteStore: UsageSQLiteStore? = nil,
+        persistenceCoordinator: UsagePersistenceCoordinating? = nil,
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init
     ) {
         let connectionSettingsStore = connectionSettingsStore ?? ConnectionSettingsStore()
         let preferencesStore = preferencesStore ?? UsagePreferencesStore()
         let resolvedSQLiteStore: UsageSQLiteStore? = sqliteStore ?? (try? UsageSQLiteStore())
+        let resolvedPersistenceCoordinator = persistenceCoordinator ?? resolvedSQLiteStore.map {
+            UsagePersistenceCoordinator(store: $0)
+        }
 
         self.apiClient = apiClient ?? UsageAPIClient()
         self.connectionSettingsStore = connectionSettingsStore
         self.preferencesStore = preferencesStore
-        self.sqliteStore = resolvedSQLiteStore
+        self.persistenceCoordinator = resolvedPersistenceCoordinator
         self.calendar = calendar
         self.now = now
 
@@ -232,9 +236,9 @@ final class UsageDashboardViewModel: ObservableObject {
         self.costCalculationBasis = costDisplaySettings.calculationBasis
         self.refreshSettings = preferencesStore.loadRefreshSettings()
 
-        if let store = resolvedSQLiteStore {
+        if let coordinator = resolvedPersistenceCoordinator {
             do {
-                self.snapshot = try persistedSnapshot(from: store)
+                self.snapshot = try persistedSnapshot(from: coordinator)
             } catch {
                 self.errorMessage = Self.message(for: error)
             }
@@ -409,42 +413,33 @@ final class UsageDashboardViewModel: ObservableObject {
                 settings: connectionSettings,
                 timeRange: selectedTimeRange
             )
-            rawPayload = payload
+            let timeRange = selectedTimeRange
+            let capturedNow = now()
+            let calendar = calendar
+            let modelPrices = modelPrices
+            let trendGranularity = trendGranularity
+            let costCalculationBasis = costCalculationBasis
+            let prepared = await Task.detached(priority: .userInitiated) {
+                UsageAggregator.preparedDashboardSnapshot(
+                    from: payload,
+                    timeRange: timeRange,
+                    prices: modelPrices,
+                    now: capturedNow,
+                    calendar: calendar,
+                    trendGranularity: trendGranularity,
+                    costCalculationBasis: costCalculationBasis
+                )
+            }.value
 
-            if let store = sqliteStore {
-                let payloadToPersist = payload
-                let timeRange = selectedTimeRange
-                let capturedNow = now()
-                let calendar = calendar
-                let modelPrices = modelPrices
-                let trendGranularity = trendGranularity
-                let costCalculationBasis = costCalculationBasis
-                snapshot = try await Task.detached(priority: .utility) {
-                    let fetchedEvents = UsageAggregator.events(
-                        from: payloadToPersist,
-                        timeRange: timeRange,
-                        now: capturedNow,
-                        calendar: calendar
-                    )
-                    try store.upsert(events: fetchedEvents)
-                    try store.saveRawFetch(payload: payloadToPersist, timeRange: timeRange, fetchedAt: capturedNow)
-                    let quotaSnapshots = UsageAggregator.credentialQuotaSnapshots(from: fetchedEvents, capturedAt: capturedNow)
-                    try store.upsert(quotaSnapshots: quotaSnapshots)
-                    return try store.dashboardSnapshot(
-                        in: timeRange,
-                        prices: modelPrices,
-                        basis: costCalculationBasis,
-                        now: capturedNow,
-                        calendar: calendar,
-                        trendGranularity: trendGranularity
-                    )
-                }.value
-                updateDisplaySnapshot()
-                writeWidgetData()
-            } else {
-                rebuildSnapshot()
-            }
-            lastUpdatedAt = now()
+            rawPayload = payload
+            publish(prepared: prepared)
+            enqueuePersistence(
+                payload: payload,
+                prepared: prepared,
+                timeRange: timeRange,
+                fetchedAt: capturedNow
+            )
+            lastUpdatedAt = capturedNow
             loadState = .loaded
             successMessage = "用量数据已更新。"
         } catch {
@@ -481,39 +476,31 @@ final class UsageDashboardViewModel: ObservableObject {
                 contentType: contentType
             )
             if let payload = importPayload(from: result, data: data, contentType: contentType) {
+                let capturedNow = now()
+                let calendar = calendar
+                let modelPrices = modelPrices
+                let trendGranularity = trendGranularity
+                let costCalculationBasis = costCalculationBasis
+                let prepared = await Task.detached(priority: .userInitiated) {
+                    UsageAggregator.preparedDashboardSnapshot(
+                        from: payload,
+                        timeRange: .all,
+                        prices: modelPrices,
+                        now: capturedNow,
+                        calendar: calendar,
+                        trendGranularity: trendGranularity,
+                        costCalculationBasis: costCalculationBasis
+                    )
+                }.value
+
                 rawPayload = payload
-                if let store = sqliteStore {
-                    let payloadToPersist = payload
-                    let capturedNow = now()
-                    let calendar = calendar
-                    let modelPrices = modelPrices
-                    let trendGranularity = trendGranularity
-                    let costCalculationBasis = costCalculationBasis
-                    snapshot = try await Task.detached(priority: .utility) {
-                        let importedEvents = UsageAggregator.events(
-                            from: payloadToPersist,
-                            timeRange: .all,
-                            now: capturedNow,
-                            calendar: calendar
-                        )
-                        try store.upsert(events: importedEvents)
-                        try store.saveRawFetch(payload: payloadToPersist, timeRange: .all, fetchedAt: capturedNow)
-                        try store.upsert(quotaSnapshots: UsageAggregator.credentialQuotaSnapshots(from: importedEvents, capturedAt: capturedNow))
-                        return try store.dashboardSnapshot(
-                            in: .all,
-                            prices: modelPrices,
-                            basis: costCalculationBasis,
-                            now: capturedNow,
-                            calendar: calendar,
-                            trendGranularity: trendGranularity
-                        )
-                    }.value
-                    updateDisplaySnapshot()
-                    writeWidgetData()
-                }
-            }
-            if sqliteStore == nil {
-                rebuildSnapshot()
+                publish(prepared: prepared)
+                enqueuePersistence(
+                    payload: payload,
+                    prepared: prepared,
+                    timeRange: .all,
+                    fetchedAt: capturedNow
+                )
             }
             successMessage = result.message.isEmpty ? "用量数据已导入。" : result.message
             errorMessage = nil
@@ -567,6 +554,10 @@ final class UsageDashboardViewModel: ObservableObject {
     func clearMessages() {
         errorMessage = nil
         successMessage = nil
+    }
+
+    func waitForPendingPersistence() async {
+        await persistenceCoordinator?.waitForPendingWrites()
     }
 
     func clearEventFilters() {
@@ -869,33 +860,21 @@ final class UsageDashboardViewModel: ObservableObject {
     }
 
     private func rebuildSnapshot() {
-        if let store = sqliteStore {
+        if let rawPayload {
+            snapshot = preparedSnapshot(from: rawPayload, timeRange: selectedTimeRange)
+            updateDisplaySnapshot()
+            writeWidgetData()
+            return
+        }
+
+        if let coordinator = persistenceCoordinator {
             do {
-                snapshot = try persistedSnapshot(from: store)
+                snapshot = try persistedSnapshot(from: coordinator)
                 errorMessage = nil
             } catch {
                 errorMessage = Self.message(for: error)
-                if rawPayload == nil {
-                    snapshot = UsageSnapshot(timeRange: selectedTimeRange)
-                }
+                snapshot = UsageSnapshot(timeRange: selectedTimeRange)
             }
-            if rawPayload == nil || errorMessage == nil {
-                updateDisplaySnapshot()
-                writeWidgetData()
-                return
-            }
-        }
-
-        if let rawPayload {
-            snapshot = UsageAggregator.aggregate(
-                rawPayload,
-                timeRange: selectedTimeRange,
-                modelPrices: modelPrices,
-                now: now(),
-                calendar: calendar,
-                trendGranularity: trendGranularity,
-                costCalculationBasis: costCalculationBasis
-            )
             updateDisplaySnapshot()
             writeWidgetData()
             return
@@ -905,8 +884,8 @@ final class UsageDashboardViewModel: ObservableObject {
         updateDisplaySnapshot()
     }
 
-    private func persistedSnapshot(from store: UsageSQLiteStore) throws -> UsageSnapshot {
-        try store.dashboardSnapshot(
+    private func persistedSnapshot(from coordinator: UsagePersistenceCoordinating) throws -> UsageSnapshot {
+        try coordinator.dashboardSnapshot(
             in: selectedTimeRange,
             prices: modelPrices,
             basis: costCalculationBasis,
@@ -916,16 +895,39 @@ final class UsageDashboardViewModel: ObservableObject {
         )
     }
 
-    private func persist(payload: UsageRawPayload, to store: UsageSQLiteStore, timeRange: UsageTimeRange) throws {
-        let importedEvents = UsageAggregator.events(
+    private func publish(prepared: UsagePreparedDashboardSnapshot) {
+        snapshot = prepared.snapshot
+        updateDisplaySnapshot()
+        writeWidgetData()
+    }
+
+    private func preparedSnapshot(from payload: UsageRawPayload, timeRange: UsageTimeRange) -> UsageSnapshot {
+        UsageAggregator.preparedDashboardSnapshot(
             from: payload,
             timeRange: timeRange,
+            prices: modelPrices,
             now: now(),
-            calendar: calendar
+            calendar: calendar,
+            trendGranularity: trendGranularity,
+            costCalculationBasis: costCalculationBasis
+        ).snapshot
+    }
+
+    private func enqueuePersistence(
+        payload: UsageRawPayload,
+        prepared: UsagePreparedDashboardSnapshot,
+        timeRange: UsageTimeRange,
+        fetchedAt: Date
+    ) {
+        persistenceCoordinator?.enqueue(
+            UsagePersistenceJob(
+                payload: payload,
+                events: prepared.events,
+                quotaSnapshots: prepared.quotaSnapshots,
+                timeRange: timeRange,
+                fetchedAt: fetchedAt
+            )
         )
-        try store.upsert(events: importedEvents)
-        try store.saveRawFetch(payload: payload, timeRange: timeRange, fetchedAt: now())
-        try store.upsert(quotaSnapshots: UsageAggregator.credentialQuotaSnapshots(from: importedEvents, capturedAt: now()))
     }
 
     private func importPayload(from result: UsageImportResult, data: Data, contentType: String) -> UsageRawPayload? {

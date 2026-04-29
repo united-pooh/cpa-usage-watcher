@@ -1,6 +1,50 @@
 import Foundation
 
+nonisolated struct UsagePreparedDashboardSnapshot {
+    var snapshot: UsageSnapshot
+    var events: [RequestEvent]
+    var quotaSnapshots: [CredentialQuotaSnapshot]
+}
+
 nonisolated enum UsageAggregator {
+    static func preparedDashboardSnapshot(
+        from payload: UsageRawPayload,
+        timeRange: UsageTimeRange = .defaultSelection,
+        prices: [ModelPriceSetting] = [],
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        trendGranularity: TrendGranularity? = nil,
+        costCalculationBasis: CostCalculationBasis = .defaultSelection
+    ) -> UsagePreparedDashboardSnapshot {
+        let events = events(
+            from: payload,
+            timeRange: timeRange,
+            now: now,
+            calendar: calendar
+        )
+        let quotaSnapshots = credentialQuotaSnapshots(from: events, capturedAt: now)
+        let hotEvents = events.map { event -> RequestEvent in
+            var event = event
+            event.metadata = [:]
+            return event
+        }
+        let snapshot = snapshot(
+            from: hotEvents,
+            timeRange: timeRange,
+            prices: prices,
+            now: now,
+            calendar: calendar,
+            trendGranularity: trendGranularity,
+            costCalculationBasis: costCalculationBasis,
+            credentialQuotas: quotaSnapshots
+        )
+        return UsagePreparedDashboardSnapshot(
+            snapshot: snapshot,
+            events: events,
+            quotaSnapshots: quotaSnapshots
+        )
+    }
+
     static func snapshot(
         from payload: UsageRawPayload,
         timeRange: UsageTimeRange = .defaultSelection,
