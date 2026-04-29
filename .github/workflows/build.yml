@@ -29,7 +29,7 @@ jobs:
         run: |
           xcodebuild \
             -project cpa-usage-watcher.xcodeproj \
-            -target cpa-usage-watcher \
+            -scheme cpa-usage-watcher \
             -configuration Release \
             -sdk macosx \
             -derivedDataPath "$DERIVED_DATA_PATH" \
